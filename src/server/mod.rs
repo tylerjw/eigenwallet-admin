@@ -31,6 +31,13 @@ pub use state::{AppConfig, AppState};
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 pub async fn run() {
+    // rustls 0.23 panics on first TLS use unless a CryptoProvider is installed.
+    // Several deps (reqwest, kube, jsonrpsee) bring rustls 0.23 transitively
+    // and none of them feature-enable a provider, so we install ring here.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("install rustls ring crypto provider");
+
     let _ = dotenvy::dotenv();
 
     tracing_subscriber::registry()
