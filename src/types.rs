@@ -215,10 +215,20 @@ pub struct RoiDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapitalEventInput {
+    /// When this capital event happened. Send as RFC3339 (`2026-04-15T14:30:00Z`)
+    /// or chrono-default. UI sends datetime-local values converted to UTC.
     pub occurred_at: DateTime<Utc>,
+    /// "deposit" or "withdraw"
     pub direction: String,
+    /// "BTC" or "XMR"
     pub asset: String,
-    pub amount_atomic: String,
+    /// Human-readable amount (e.g. "1.5" for 1.5 BTC). Server converts to
+    /// atomic units (sat / piconero) based on `asset`.
+    pub amount: String,
+    /// USD value of the amount at the time of the event. Optional. If blank
+    /// and the event is "recent" (within the CEX cache freshness), the server
+    /// fills it from the live CEX price; otherwise it's stored as NULL and
+    /// the operator can fill in historical price later.
     pub usd_value_at_event: Option<String>,
     pub notes: Option<String>,
 }

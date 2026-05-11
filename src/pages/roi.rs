@@ -19,7 +19,7 @@ pub async fn get_roi(
     .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-#[server(name = ListCapitalEvents, prefix = "/api", endpoint = "capital-events")]
+#[server(name = ListCapitalEvents, prefix = "/api", endpoint = "capital-events/list")]
 pub async fn list_capital_events() -> Result<Vec<CapitalEventDto>, ServerFnError> {
     let state = crate::server::ssr_state()?;
     crate::server::api::capital::list(&state)
@@ -27,7 +27,7 @@ pub async fn list_capital_events() -> Result<Vec<CapitalEventDto>, ServerFnError
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-#[server(name = AddCapitalEvent, prefix = "/api", endpoint = "capital-events")]
+#[server(name = AddCapitalEvent, prefix = "/api", endpoint = "capital-events/add")]
 pub async fn add_capital_event(input: CapitalEventInput) -> Result<CapitalEventDto, ServerFnError> {
     let state = crate::server::ssr_state()?;
     crate::server::api::capital::add(&state, input)
@@ -81,6 +81,9 @@ fn RoiTile(r: RoiDto) -> impl IntoView {
 
 #[component]
 fn CapitalEventForm(on_added: impl Fn() + 'static + Clone + Send) -> impl IntoView {
+    // Default "occurred_at" = now, formatted as datetime-local (no TZ suffix).
+    let now_local = chrono::Utc::now().format("%Y-%m-%dT%H:%M").to_string();
+    let occurred = RwSignal::new(now_local);
     let direction = RwSignal::new("deposit".to_string());
     let asset = RwSignal::new("BTC".to_string());
     let amount = RwSignal::new(String::new());
@@ -90,11 +93,20 @@ fn CapitalEventForm(on_added: impl Fn() + 'static + Clone + Send) -> impl IntoVi
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
+        // Parse the datetime-local value `YYYY-MM-DDTHH:MM` as UTC.
+        let occurred_at =
+            match chrono::NaiveDateTime::parse_from_str(occurred.get().trim(), "%Y-%m-%dT%H:%M") {
+                Ok(n) => n.and_utc(),
+                Err(_) => {
+                    status.set(Some("FAIL: invalid date".into()));
+                    return;
+                }
+            };
         let input = CapitalEventInput {
-            occurred_at: chrono::Utc::now(),
+            occurred_at,
             direction: direction.get(),
             asset: asset.get(),
-            amount_atomic: amount.get(),
+            amount: amount.get(),
             usd_value_at_event: if usd.get().trim().is_empty() {
                 None
             } else {
@@ -111,6 +123,9 @@ fn CapitalEventForm(on_added: impl Fn() + 'static + Clone + Send) -> impl IntoVi
             match add_capital_event(input).await {
                 Ok(_) => {
                     status.set(Some("Recorded.".into()));
+                    amount.set(String::new());
+                    usd.set(String::new());
+                    notes.set(String::new());
                     on_added();
                 }
                 Err(e) => status.set(Some(format!("FAIL: {e}"))),
@@ -118,10 +133,31 @@ fn CapitalEventForm(on_added: impl Fn() + 'static + Clone + Send) -> impl IntoVi
         });
     };
 
+    let amount_label = move || match asset.get().as_str() {
+        "BTC" => "Amount (BTC)",
+        "XMR" => "Amount (XMR)",
+        _ => "Amount",
+    };
+
     view! {
         <form class="tile space-y-3" on:submit=on_submit>
             <div class="tile-title">"Record capital event"</div>
-            <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <p class="text-xs text-slate-400">
+                "Record a deposit (BTC or XMR moved INTO the wallet from cold storage / an exchange) "
+                "or a withdrawal (moved OUT to cold storage). The system can't auto-detect these — incoming "
+                "BTC also arrives from swap counterparties, so only you know which transactions are real capital "
+                "events vs. trading flow. Enter the date the funds actually moved on-chain."
+            </p>
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
+                <label class="text-xs uppercase text-slate-400 md:col-span-2">
+                    "When (UTC)"
+                    <input
+                        type="datetime-local"
+                        class="input mt-1"
+                        prop:value=move || occurred.get()
+                        on:input=move |ev| occurred.set(event_target_value(&ev))
+                    />
+                </label>
                 <label class="text-xs uppercase text-slate-400">
                     "Direction"
                     <select
@@ -143,30 +179,32 @@ fn CapitalEventForm(on_added: impl Fn() + 'static + Clone + Send) -> impl IntoVi
                     </select>
                 </label>
                 <label class="text-xs uppercase text-slate-400">
-                    "Amount (atomic units)"
+                    {amount_label}
                     <input
                         class="input mt-1"
+                        placeholder="e.g. 1.5"
                         prop:value=move || amount.get()
                         on:input=move |ev| amount.set(event_target_value(&ev))
                     />
                 </label>
                 <label class="text-xs uppercase text-slate-400">
-                    "USD override (optional)"
+                    "USD value (optional)"
                     <input
                         class="input mt-1"
+                        placeholder="auto for recent"
                         prop:value=move || usd.get()
                         on:input=move |ev| usd.set(event_target_value(&ev))
                     />
                 </label>
-                <label class="text-xs uppercase text-slate-400">
-                    "Notes"
-                    <input
-                        class="input mt-1"
-                        prop:value=move || notes.get()
-                        on:input=move |ev| notes.set(event_target_value(&ev))
-                    />
-                </label>
             </div>
+            <label class="text-xs uppercase text-slate-400 block">
+                "Notes"
+                <input
+                    class="input mt-1"
+                    prop:value=move || notes.get()
+                    on:input=move |ev| notes.set(event_target_value(&ev))
+                />
+            </label>
             <div class="flex items-center gap-3">
                 <button type="submit" class="btn">"Record"</button>
                 {move || status.get().map(|s| view! { <span class="text-xs text-slate-400">{s}</span> })}
