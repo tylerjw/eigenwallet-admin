@@ -24,7 +24,10 @@ RUN apt-get update \
 RUN rustup target add wasm32-unknown-unknown
 
 # cargo-leptos pulls cargo-chef-style dep caching for *both* server and wasm.
-RUN cargo install --locked cargo-leptos --version ^0.2
+# cargo-leptos 0.3+ downloads a matching `wasm-bindgen-cli` at runtime rather
+# than bundling it, which avoids the schema-version mismatch we hit on 0.2.47
+# (bundled wasm-bindgen 0.2.105 vs project 0.2.121).
+RUN cargo install --locked cargo-leptos --version ^0.3
 
 COPY --from=planner /app/recipe.json recipe.json
 # Cook the SSR deps. The wasm deps cache is built by cargo-leptos below.

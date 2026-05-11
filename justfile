@@ -82,4 +82,4 @@ kube-validate path:
 # ---- one-shot bootstrap for fresh machines -------------------------------
 
 bootstrap: toolchain
-    cargo install cargo-leptos cargo-edit cargo-audit just || true
+    cargo install --locked cargo-leptos@^0.3 cargo-edit cargo-audit just || true
