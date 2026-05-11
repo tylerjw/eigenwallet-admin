@@ -119,6 +119,9 @@ codegen-units = 1
 
 [package.metadata.leptos]
 output-name = "eigenwallet-admin"
+# Two binaries are defined (eigenwallet-admin = the server, seed-admin = CLI);
+# tell cargo-leptos which one is the SSR server.
+bin-target = "eigenwallet-admin"
 site-root = "target/site"
 site-pkg-dir = "pkg"
 tailwind-input-file = "style/tailwind.css"

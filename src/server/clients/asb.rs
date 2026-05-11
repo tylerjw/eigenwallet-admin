@@ -213,10 +213,10 @@ pub struct OnionStatus {
 
 /// Parse asb's swap `start_date` field. Format:
 ///   "2026-04-19 10:52:14.854013895 +00:00:00"
-/// — chrono's `DateTime<FixedOffset>` default Display. The `%:::z` specifier
-/// covers the unusual three-colon offset.
+/// — chrono's `DateTime<FixedOffset>` default Display. `%::z` is the
+/// `+HH:MM:SS` (two-colon) offset specifier.
 pub fn parse_swap_start_date(s: &str) -> Option<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f %:::z").ok()
+    DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f %::z").ok()
 }
 
 #[cfg(test)]
