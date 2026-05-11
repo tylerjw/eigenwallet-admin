@@ -213,10 +213,30 @@ pub struct OnionStatus {
 
 /// Parse asb's swap `start_date` field. Format:
 ///   "2026-04-19 10:52:14.854013895 +00:00:00"
-/// — chrono's `DateTime<FixedOffset>` default Display. `%::z` is the
-/// `+HH:MM:SS` (two-colon) offset specifier.
+///
+/// This is chrono's own `DateTime<FixedOffset>` Display output, but chrono
+/// can't parse it back: its `%::z` specifier accepts `+HH:MM` (not the
+/// `+HH:MM:SS` form chrono itself produces). Strip the trailing `:SS` from
+/// the offset and parse with `%:z`.
 pub fn parse_swap_start_date(s: &str) -> Option<DateTime<FixedOffset>> {
-    DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f %::z").ok()
+    let trimmed = strip_offset_seconds(s);
+    DateTime::parse_from_str(&trimmed, "%Y-%m-%d %H:%M:%S%.f %:z").ok()
+}
+
+fn strip_offset_seconds(s: &str) -> String {
+    // Split off the offset (everything after the last whitespace) and, if it
+    // has two colons (`+HH:MM:SS`), drop the last `:XX`.
+    let Some(sp) = s.rfind(char::is_whitespace) else {
+        return s.to_string();
+    };
+    let (head, tail) = s.split_at(sp);
+    let offset = tail.trim_start();
+    if offset.matches(':').count() == 2
+        && let Some(last_colon) = offset.rfind(':')
+    {
+        return format!("{head} {}", &offset[..last_colon]);
+    }
+    s.to_string()
 }
 
 #[cfg(test)]
@@ -224,8 +244,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_swap_start_date() {
+    fn parses_swap_start_date_with_seconds_offset() {
         let dt = parse_swap_start_date("2026-04-19 10:52:14.854013895 +00:00:00");
-        assert!(dt.is_some(), "expected a parsed DateTime");
+        assert!(dt.is_some(), "expected a parsed DateTime, got None");
+        assert_eq!(
+            dt.unwrap().to_rfc3339(),
+            "2026-04-19T10:52:14.854013895+00:00"
+        );
+    }
+
+    #[test]
+    fn parses_swap_start_date_with_two_segment_offset() {
+        let dt = parse_swap_start_date("2026-04-19 10:52:14.123 +00:00");
+        assert!(dt.is_some());
     }
 }
