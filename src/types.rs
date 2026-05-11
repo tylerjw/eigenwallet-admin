@@ -110,6 +110,32 @@ pub struct ChartSeries {
     pub period: String,
 }
 
+/// P&L attribution: decomposes the change in total portfolio value over a
+/// period into three components. Identity:
+///   end_value - start_value = market_pnl + trade_pnl + capital_flow
+///
+/// - `market_pnl`: value change from price moves on existing holdings
+///   (between snapshots, holdings(t-1) × (price(t) - price(t-1)))
+/// - `trade_pnl`: value change from quantity changes priced at the post-trade
+///   price, minus any external capital flow in the same interval. Captures
+///   the spread the maker has captured (or surrendered) via swaps.
+/// - `capital_flow`: net external deposits minus withdrawals (USD at event).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttributionDto {
+    /// Actual portfolio value over time, USD.
+    pub actual: Vec<ChartPoint>,
+    /// Hypothetical value if no swaps had occurred (price moves and external
+    /// capital flow only).
+    pub no_trade_baseline: Vec<ChartPoint>,
+    pub start_value_usd: String,
+    pub end_value_usd: String,
+    pub market_pnl_usd: String,
+    pub trade_pnl_usd: String,
+    pub capital_flow_usd: String,
+    pub period: String,
+    pub sample_count: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MakerConfigDto {
     pub min_buy_btc: String,
