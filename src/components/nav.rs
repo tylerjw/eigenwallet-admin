@@ -17,11 +17,14 @@ pub fn Nav() -> impl IntoView {
                 <NavLink href="/competitors" label="Competitors"/>
                 <NavLink href="/roi" label="ROI"/>
                 <NavLink href="/wallet-rules" label="Wallet rules"/>
-                <div class="ml-auto">
-                    <a href="/api/auth/logout" class="text-sm text-slate-400 hover:text-slate-200">
+                <form method="POST" action="/api/auth/logout" class="ml-auto">
+                    <button
+                        type="submit"
+                        class="text-sm text-slate-400 hover:text-slate-200 bg-transparent border-0 cursor-pointer"
+                    >
                         "Logout"
-                    </a>
-                </div>
+                    </button>
+                </form>
             </div>
         </header>
     }
