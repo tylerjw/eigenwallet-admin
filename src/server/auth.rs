@@ -30,7 +30,10 @@ pub async fn mark_authed(session: &Session) -> Result<()> {
 }
 
 pub async fn clear(session: &Session) {
-    let _ = session.remove::<bool>(SESSION_AUTHED_KEY).await;
+    // `delete()` flags the session for removal AND sends a removal cookie on
+    // the next response. Without this the cookie value stays valid (just
+    // with no authed key), which is harmless but confusing in dev tools.
+    let _ = session.flush().await;
 }
 
 pub async fn verify_password(state: &AppStateInner, password: &str) -> Result<bool> {

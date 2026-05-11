@@ -1,8 +1,15 @@
 use leptos::prelude::*;
 use leptos_router::components::A;
 
+use crate::pages::login::Logout;
+
 #[component]
 pub fn Nav() -> impl IntoView {
+    // ActionForm dispatches the server function via the Leptos client, which
+    // understands the `serverfnredirect` convention and follows the `Location`
+    // header. A plain <form POST> would just render the JSON body.
+    let logout_action = ServerAction::<Logout>::new();
+
     view! {
         <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-10">
             <div class="max-w-7xl mx-auto px-4 md:px-6 py-3 flex items-center gap-4 overflow-x-auto">
@@ -17,14 +24,14 @@ pub fn Nav() -> impl IntoView {
                 <NavLink href="/competitors" label="Competitors"/>
                 <NavLink href="/roi" label="ROI"/>
                 <NavLink href="/wallet-rules" label="Wallet rules"/>
-                <form method="POST" action="/api/auth/logout" class="ml-auto">
+                <ActionForm action=logout_action attr:class="ml-auto">
                     <button
                         type="submit"
                         class="text-sm text-slate-400 hover:text-slate-200 bg-transparent border-0 cursor-pointer"
                     >
                         "Logout"
                     </button>
-                </form>
+                </ActionForm>
             </div>
         </header>
     }
