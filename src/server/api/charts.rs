@@ -20,6 +20,9 @@ pub async fn account_value(
 
     let rows: Vec<(DateTime<Utc>, Decimal, Decimal)> = balance_snapshots::table
         .filter(balance_snapshots::taken_at.ge(since))
+        // Skip rows recorded before CEX prices populated; total_usd would be
+        // zero on those and ruins the y-axis scale.
+        .filter(balance_snapshots::total_usd.gt(Decimal::ZERO))
         .select((
             balance_snapshots::taken_at,
             balance_snapshots::total_usd,
@@ -99,7 +102,7 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
     let mut conn = db::checkout(&state.pool).await?;
 
     type SnapshotRow = (DateTime<Utc>, i64, Decimal, Decimal, Decimal, Decimal);
-    let snapshots: Vec<SnapshotRow> = balance_snapshots::table
+    let mut snapshots: Vec<SnapshotRow> = balance_snapshots::table
         .filter(balance_snapshots::taken_at.ge(since))
         .select((
             balance_snapshots::taken_at,
@@ -112,6 +115,17 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .order(balance_snapshots::taken_at.asc())
         .load(&mut *conn)
         .await?;
+    // Drop leading rows where the CEX cache hadn't populated yet (btc_usd or
+    // xmr_usd == 0). Without this, the first interval's market-PnL gets
+    // (real_price − 0) × holdings, which inflates the chart by the entire
+    // portfolio value and isn't real P&L.
+    let drop = snapshots
+        .iter()
+        .take_while(|r| r.3.is_zero() || r.4.is_zero())
+        .count();
+    if drop > 0 {
+        snapshots.drain(..drop);
+    }
 
     type CapitalRow = (DateTime<Utc>, String, Option<Decimal>);
     let cap_events: Vec<CapitalRow> = capital_events::table
