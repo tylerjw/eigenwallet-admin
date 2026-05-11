@@ -35,6 +35,10 @@ RUN cargo chef cook --release --features ssr --recipe-path recipe.json
 
 COPY . .
 RUN cargo leptos build --release
+# cargo-leptos only builds the bin-target (eigenwallet-admin). seed-admin needs
+# a separate `cargo build` step; otherwise the runtime image ships a 320 KB
+# cargo-chef empty-main stub.
+RUN cargo build --release --features ssr --bin seed-admin
 
 FROM debian:trixie-slim AS runtime
 
