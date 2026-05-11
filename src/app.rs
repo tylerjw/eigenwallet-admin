@@ -9,7 +9,7 @@ use crate::components::nav::Nav;
 use crate::pages::{
     charts::ChartsPage, competitors::CompetitorsPage, health::HealthPage, login::LoginPage,
     not_found::NotFoundPage, overview::OverviewPage, roi::RoiPage, spread::SpreadPage,
-    swaps::SwapsPage,
+    swaps::SwapsPage, wallet_rules::WalletRulesPage,
 };
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -51,6 +51,7 @@ pub fn App() -> impl IntoView {
                         <Route path=StaticSegment("spread") view=SpreadPage/>
                         <Route path=StaticSegment("competitors") view=CompetitorsPage/>
                         <Route path=StaticSegment("roi") view=RoiPage/>
+                        <Route path=StaticSegment("wallet-rules") view=WalletRulesPage/>
                     </Routes>
                 </main>
             </div>

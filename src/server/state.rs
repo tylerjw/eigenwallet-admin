@@ -11,6 +11,7 @@ use crate::server::clients::cex::CexCache;
 use crate::server::clients::electrs::ElectrsClient;
 use crate::server::clients::monerod::MonerodClient;
 use crate::server::kube_client::KubeClient;
+use crate::server::wallet_rules::{WalletRulesCache, WalletRulesHandle};
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -86,6 +87,7 @@ pub struct AppStateInner {
     pub electrs: ElectrsClient,
     pub cex: RwLock<CexCache>,
     pub kube: Option<KubeClient>,
+    pub wallet_rules: WalletRulesHandle,
     pub leptos_options: LeptosOptions,
 }
 
@@ -126,6 +128,7 @@ impl AppState {
             electrs,
             cex: RwLock::new(CexCache::default()),
             kube,
+            wallet_rules: Arc::new(RwLock::new(WalletRulesCache::default())),
             leptos_options,
         }))
     }

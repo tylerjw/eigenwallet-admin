@@ -244,6 +244,22 @@ pub struct CapitalEventDto {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaggedAddressDto {
+    pub addr: String,
+    pub kind: String,
+    pub asset: Option<String>,
+    pub label: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WalletRulesDto {
+    pub addresses: Vec<TaggedAddressDto>,
+    pub last_loaded: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub password: String,

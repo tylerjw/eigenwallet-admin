@@ -254,7 +254,7 @@ fn signed_diff(end: &str, start: &str) -> String {
     fmt_usd_signed(&(e - s).to_string())
 }
 
-fn sparkline_svg(points: &[ChartPoint], w: i32, h: i32) -> String {
+pub(crate) fn sparkline_svg(points: &[ChartPoint], w: i32, h: i32) -> String {
     if points.is_empty() {
         return format!(
             "<svg viewBox='0 0 {w} {h}' class='w-full'><text x='10' y='20' fill='#64748b'>no data</text></svg>"
@@ -279,11 +279,40 @@ fn sparkline_svg(points: &[ChartPoint], w: i32, h: i32) -> String {
         d.push_str(if i == 0 { "M " } else { " L " });
         d.push_str(&format!("{:.2} {:.2}", to_x(*x), to_y(*y)));
     }
+    // Hover targets: one invisible circle per point with a native <title>
+    // showing the UTC timestamp and the formatted value.
+    let mut hits = String::new();
+    for (i, p) in points.iter().enumerate() {
+        let x = to_x(xs[i]);
+        let y = to_y(ys[i]);
+        let when = p.t.format("%Y-%m-%d %H:%M UTC");
+        let v_display = format_axis_value(ys[i]);
+        hits.push_str(&format!(
+            "<circle cx='{x:.2}' cy='{y:.2}' r='6' fill='transparent' \
+              stroke='transparent' style='cursor:crosshair' \
+              onmouseover=\"this.setAttribute('fill','#818cf8')\" \
+              onmouseout=\"this.setAttribute('fill','transparent')\">\
+              <title>{when} • {v_display}</title>\
+             </circle>",
+        ));
+    }
     format!(
         "<svg viewBox='0 0 {w} {h}' class='w-full'>\
            <path d='{d}' fill='none' stroke='#818cf8' stroke-width='1.5'/>\
+           {hits}\
          </svg>"
     )
+}
+
+/// Format an axis value compactly. Uses thousand separators; if the absolute
+/// value is large, drops the decimal portion. Used for tooltips and axis labels.
+fn format_axis_value(v: f64) -> String {
+    if v.abs() >= 1000.0 {
+        let s = fmt_thousands(v);
+        s.split_once('.').map(|(a, _)| a.to_string()).unwrap_or(s)
+    } else {
+        fmt_thousands(v)
+    }
 }
 
 /// Two-line plot: actual (solid indigo) over no-trade-baseline (dashed slate).
@@ -324,6 +353,30 @@ fn two_line_svg(a: &[ChartPoint], b: &[ChartPoint], w: i32, h: i32) -> String {
     let actual_d = path(a);
     let baseline_d = path(b);
 
+    // Hover hits: one circle per actual point with both lines' values in the
+    // tooltip. (We pair by index; both series share the snapshot timestamps.)
+    let mut hits = String::new();
+    for (i, p) in a.iter().enumerate() {
+        let (x, y) = xy(p);
+        let baseline_v = b.get(i).map(|q| xy(q).1).unwrap_or(0.0);
+        let when = p.t.format("%Y-%m-%d %H:%M UTC");
+        let actual_s = format!("${}", format_axis_value(y));
+        let baseline_s = format!("${}", format_axis_value(baseline_v));
+        let trade_diff = y - baseline_v;
+        let sign = if trade_diff >= 0.0 { "+" } else { "-" };
+        let trade_s = format!("{sign}${}", format_axis_value(trade_diff.abs()));
+        hits.push_str(&format!(
+            "<circle cx='{cx:.2}' cy='{cy:.2}' r='8' fill='transparent' \
+              stroke='transparent' style='cursor:crosshair' \
+              onmouseover=\"this.setAttribute('fill','#818cf8')\" \
+              onmouseout=\"this.setAttribute('fill','transparent')\">\
+              <title>{when}\nactual: {actual_s}\nno-trade: {baseline_s}\ntrade Δ: {trade_s}</title>\
+             </circle>",
+            cx = to_x(x),
+            cy = to_y(y),
+        ));
+    }
+
     // Y axis labels: min, mid, max
     let labels = [
         (ymax, to_y(ymax)),
@@ -349,6 +402,7 @@ fn two_line_svg(a: &[ChartPoint], b: &[ChartPoint], w: i32, h: i32) -> String {
            {axis}\
            <path d='{baseline_d}' fill='none' stroke='#94a3b8' stroke-width='1.3' stroke-dasharray='4 3'/>\
            <path d='{actual_d}' fill='none' stroke='#818cf8' stroke-width='1.6'/>\
+           {hits}\
          </svg>"
     )
 }

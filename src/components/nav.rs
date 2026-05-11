@@ -16,6 +16,7 @@ pub fn Nav() -> impl IntoView {
                 <NavLink href="/spread" label="Spread"/>
                 <NavLink href="/competitors" label="Competitors"/>
                 <NavLink href="/roi" label="ROI"/>
+                <NavLink href="/wallet-rules" label="Wallet rules"/>
                 <div class="ml-auto">
                     <a href="/api/auth/logout" class="text-sm text-slate-400 hover:text-slate-200">
                         "Logout"

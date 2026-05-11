@@ -14,5 +14,9 @@ pub fn spawn_all(state: AppState) {
     tokio::spawn(balance_snapshot::run(state.clone()));
     tokio::spawn(swap_sync::run(state.clone()));
     tokio::spawn(log_tail::run(state.clone()));
+    tokio::spawn(crate::server::wallet_rules::refresh(
+        state.wallet_rules.clone(),
+        state.0.clone(),
+    ));
     tokio::spawn(competitor_scan::run(state));
 }

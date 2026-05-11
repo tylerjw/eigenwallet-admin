@@ -66,6 +66,7 @@ futures = { version = "0.3", optional = true }
 notify = { version = "8", optional = true }
 electrum-client = { version = "0.25", optional = true }
 dotenvy = { version = "0.15", optional = true }
+serde_yaml_ng = { version = "0.10", optional = true }
 
 [features]
 default = ["ssr"]
@@ -107,6 +108,7 @@ ssr = [
   "dep:electrum-client",
   "dep:dotenvy",
   "dep:rustls",
+  "dep:serde_yaml_ng",
 ]
 
 [profile.release]

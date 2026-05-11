@@ -9,6 +9,7 @@ pub mod models;
 pub mod pollers;
 pub mod schema;
 pub mod state;
+pub mod wallet_rules;
 
 use std::sync::Arc;
 
