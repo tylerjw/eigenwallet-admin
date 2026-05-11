@@ -186,8 +186,7 @@ async fn parse_and_persist(state: &AppStateInner, scan_id: Uuid, logs: &str) -> 
             .and_then(|q| q.get("max_quantity"))
             .and_then(|p| p.as_i64());
         // A seller with all-zero amounts is effectively unreachable / disabled.
-        let reachable =
-            quote.is_some() && price_sat.unwrap_or(0) > 0 && max_sat.unwrap_or(0) > 0;
+        let reachable = quote.is_some() && price_sat.unwrap_or(0) > 0 && max_sat.unwrap_or(0) > 0;
         quotes.push(NewCompetitorQuote {
             scan_id,
             peer_id: peer_id.to_string(),
