@@ -125,7 +125,8 @@ bin-target = "eigenwallet-admin"
 site-root = "target/site"
 site-pkg-dir = "pkg"
 tailwind-input-file = "style/tailwind.css"
-tailwind-config-file = "tailwind.config.js"
+# Tailwind v4 is CSS-first; no tailwind.config.js. Source globs are declared
+# inline in style/tailwind.css via @source directives.
 assets-dir = "public"
 site-addr = "0.0.0.0:4000"
 reload-port = 3001

@@ -1,6 +1,8 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Tell Tailwind v4 to scan the Leptos source for utility usage. */
+@source "../src/**/*.rs";
+@source "../public/**/*.html";
 
 @layer base {
   :root {
