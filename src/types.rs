@@ -115,6 +115,32 @@ pub struct ChartSeries {
     pub period: String,
 }
 
+/// A single capital event marker for chart decoration. Used by the Overview
+/// 30d chart to show deposit/withdraw points along the value line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CapitalEventMarker {
+    pub at: DateTime<Utc>,
+    /// "deposit" or "withdraw"
+    pub direction: String,
+    /// "BTC" or "XMR"
+    pub asset: String,
+    /// USD value of the event at the time it occurred. None if the operator
+    /// didn't supply one (older events without CEX-cached pricing).
+    pub usd_value: Option<String>,
+}
+
+/// Bundled response for the Overview chart tile: the value series plus
+/// capital-event markers plus the trading-only delta for the same window.
+/// One round-trip instead of three.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OverviewChartDto {
+    pub series: ChartSeries,
+    pub markers: Vec<CapitalEventMarker>,
+    /// Signed decimal string of `trade_pnl_usd` from attribution. Empty
+    /// string if attribution couldn't be computed (e.g. <2 snapshots).
+    pub trade_only_delta_usd: String,
+}
+
 /// P&L attribution: decomposes the change in total portfolio value over a
 /// period into three components. Identity:
 ///   end_value - start_value = market_pnl + trade_pnl + capital_flow

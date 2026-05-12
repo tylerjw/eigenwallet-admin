@@ -13,7 +13,7 @@ use leptos::prelude::*;
 use leptos::web_sys;
 use wasm_bindgen::JsCast;
 
-use crate::types::ChartPoint;
+use crate::types::{CapitalEventMarker, ChartPoint};
 
 #[derive(Clone, Copy)]
 pub struct ChartTheme {
@@ -36,6 +36,13 @@ pub const USD_THEME: ChartTheme = ChartTheme {
 
 /// Single-line interactive chart. `value_prefix` is shown before the readout
 /// (e.g. "$" for USD); `height` is the SVG height in viewBox units.
+///
+/// `markers` (optional) decorates the plot with thin dotted vertical hairlines
+/// at capital_event timestamps. When the cursor is near a marker, the readout
+/// appends a short "+$X deposit (BTC)" / "−$X withdraw (XMR)" line.
+///
+/// `trade_only_delta_usd` (optional) adds a second small line under the main
+/// delta readout: `"Trading only: +$XXX"`, colored green/red.
 #[component]
 pub fn InteractiveLineChart(
     points: Vec<ChartPoint>,
@@ -43,6 +50,8 @@ pub fn InteractiveLineChart(
     #[prop(default = 200)] height: i32,
     #[prop(default = 1000)] width: i32,
     #[prop(default = "$")] value_prefix: &'static str,
+    #[prop(optional, into)] markers: Option<Vec<CapitalEventMarker>>,
+    #[prop(optional, into)] trade_only_delta_usd: Option<String>,
 ) -> impl IntoView {
     if points.is_empty() {
         return view! {
@@ -94,6 +103,39 @@ pub fn InteractiveLineChart(
     let xs_px: Vec<f64> = xs_t.iter().map(|t| to_x(*t)).collect();
     let ys_px: Vec<f64> = ys_v.iter().map(|v| to_y(*v)).collect();
     let xs_px = Arc::new(xs_px);
+
+    // Project markers into viewBox x coordinates. Drop any marker whose
+    // timestamp falls outside the chart's x range (shouldn't happen with a
+    // properly windowed server response, but defend against it).
+    struct ProjectedMarker {
+        x: f64,
+        text: String,
+    }
+    let projected_markers: Vec<ProjectedMarker> = markers
+        .as_ref()
+        .map(|ms| {
+            ms.iter()
+                .filter_map(|m| {
+                    let t = m.at.timestamp() as f64;
+                    if t < xmin || t > xmax {
+                        return None;
+                    }
+                    Some(ProjectedMarker {
+                        x: to_x(t),
+                        text: format_marker_text(m),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let projected_markers = Arc::new(projected_markers);
+
+    // Trading-only delta readout (Overview only). Parse the signed decimal
+    // string; if it doesn't parse, hide the line.
+    let trade_only_parsed: Option<f64> = trade_only_delta_usd
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<f64>().ok());
 
     // Build the line path (smooth-ish via straight segments; could quadratic
     // smooth later but linear matches Kraken's default look).
@@ -220,6 +262,30 @@ pub fn InteractiveLineChart(
     let ys_for_y = Arc::new(ys_px);
     let cursor_y = Memo::new(move |_| cursor.get().and_then(|i| ys_for_y.get(i).copied()));
 
+    // If the cursor is within ~5px of any marker, return its tooltip text.
+    let marker_hit_text = Memo::new({
+        let xs = xs_px.clone();
+        let pm = projected_markers.clone();
+        move |_| -> Option<String> {
+            let idx = cursor.get()?;
+            let cx = xs.get(idx).copied()?;
+            pm.iter()
+                .find(|m| (m.x - cx).abs() <= 5.0)
+                .map(|m| m.text.clone())
+        }
+    });
+
+    // Trade-only delta line — only shown if we got a non-empty, parseable value.
+    let trade_only_line: Option<(String, &'static str)> = trade_only_parsed.map(|v| {
+        let sign = if v >= 0.0 { "+" } else { "−" };
+        let label = format!(
+            "Trading only: {sign}{value_prefix}{}",
+            fmt_thousands(v.abs())
+        );
+        let color = if v >= 0.0 { theme.up } else { theme.down };
+        (label, color)
+    });
+
     view! {
         <div class="mt-2">
             <div class="text-2xl md:text-3xl font-mono font-semibold text-slate-50 tabular-nums">
@@ -233,7 +299,18 @@ pub fn InteractiveLineChart(
                 >
                     {move || readout_delta_text.get()}
                 </span>
+                {move || marker_hit_text.get().map(|t| view! {
+                    <span class="font-mono tabular-nums text-slate-400">{t}</span>
+                })}
             </div>
+            {trade_only_line.map(|(label, color)| view! {
+                <div
+                    class="text-xs mt-0.5 font-mono tabular-nums"
+                    style=format!("color: {};", color)
+                >
+                    {label}
+                </div>
+            })}
             <svg
                 viewBox=format!("0 0 {width} {height}")
                 preserveAspectRatio="none"
@@ -292,6 +369,18 @@ pub fn InteractiveLineChart(
                 <path d=area_d fill="url(#ewa-chart-fill)"/>
                 <path d=path_d fill="none" stroke=theme.line stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
 
+                // Capital-event markers: faint dotted vertical hairlines.
+                {projected_markers.iter().map(|m| view! {
+                    <line
+                        x1=m.x y1=pad_t_v
+                        x2=m.x y2=pad_t_v + plot_h_v
+                        stroke="#64748b"
+                        stroke-width="1"
+                        stroke-dasharray="1 3"
+                        stroke-opacity="0.55"
+                    />
+                }).collect_view()}
+
                 // Crosshair (only when hovering)
                 {move || cursor_x.get().map(|x| view! {
                     <line
@@ -332,6 +421,19 @@ fn fmt_thousands(v: f64) -> String {
         format!("-{int_part}.{dec}")
     } else {
         format!("{int_part}.{dec}")
+    }
+}
+
+/// Tooltip text for a capital-event marker, e.g.
+/// `"+$2,000 deposit (BTC)"` or `"−$500 withdraw (XMR)"`.
+/// USD value missing → drops the dollar amount, e.g. `"deposit (XMR)"`.
+fn format_marker_text(m: &CapitalEventMarker) -> String {
+    let usd_part = m.usd_value.as_deref().and_then(|s| s.parse::<f64>().ok());
+    match (usd_part, m.direction.as_str()) {
+        (Some(v), "withdraw") => format!("−${} withdraw ({})", fmt_thousands(v.abs()), m.asset),
+        (Some(v), _) => format!("+${} deposit ({})", fmt_thousands(v.abs()), m.asset),
+        (None, "withdraw") => format!("withdraw ({})", m.asset),
+        (None, _) => format!("deposit ({})", m.asset),
     }
 }
 

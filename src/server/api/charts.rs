@@ -8,7 +8,7 @@ use rust_decimal::Decimal;
 use crate::server::db;
 use crate::server::schema::{balance_snapshots, capital_events, swaps};
 use crate::server::state::AppStateInner;
-use crate::types::{AttributionDto, ChartPoint, ChartSeries};
+use crate::types::{AttributionDto, CapitalEventMarker, ChartPoint, ChartSeries, OverviewChartDto};
 
 pub async fn account_value(
     state: &AppStateInner,
@@ -213,6 +213,55 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         capital_flow_usd: cum_capital.to_string(),
         period: period.to_string(),
         sample_count: snapshots.len() as i32,
+    })
+}
+
+/// Composite endpoint for the Overview chart tile. Bundles:
+///   * the USD value series for `period`,
+///   * the capital_events that fall inside `period` (deposit/withdraw markers),
+///   * the trading-only delta (`trade_pnl_usd`) over the same window.
+///
+/// Attribution is best-effort: if it fails (e.g. <2 snapshots), the
+/// `trade_only_delta_usd` is left as an empty string so the UI hides it.
+pub async fn overview_chart(state: &AppStateInner, period: &str) -> Result<OverviewChartDto> {
+    let series = account_value(state, period, "usd").await?;
+
+    let since = parse_period(period);
+    let mut conn = db::checkout(&state.pool).await?;
+
+    type MarkerRow = (DateTime<Utc>, String, String, Option<Decimal>);
+    let rows: Vec<MarkerRow> = capital_events::table
+        .filter(capital_events::occurred_at.ge(since))
+        .select((
+            capital_events::occurred_at,
+            capital_events::direction,
+            capital_events::asset,
+            capital_events::usd_value_at_event,
+        ))
+        .order(capital_events::occurred_at.asc())
+        .load(&mut *conn)
+        .await?;
+    drop(conn);
+
+    let markers = rows
+        .into_iter()
+        .map(|(at, direction, asset, usd_value)| CapitalEventMarker {
+            at,
+            direction,
+            asset,
+            usd_value: usd_value.map(|v| v.to_string()),
+        })
+        .collect();
+
+    let trade_only_delta_usd = match attribution(state, period).await {
+        Ok(a) if a.sample_count >= 2 => a.trade_pnl_usd,
+        _ => String::new(),
+    };
+
+    Ok(OverviewChartDto {
+        series,
+        markers,
+        trade_only_delta_usd,
     })
 }
 

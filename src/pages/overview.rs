@@ -2,10 +2,9 @@ use leptos::prelude::*;
 
 use crate::components::chart::InteractiveLineChart;
 use crate::components::tile::Tile;
-use crate::pages::charts::get_account_value;
 use crate::pages::health::get_health;
 use crate::types::{
-    ChartSeries, HealthDto, HealthState, LifetimeRoiDto, MakerConfigUpdateResult, OverviewDto,
+    HealthDto, HealthState, LifetimeRoiDto, MakerConfigUpdateResult, OverviewChartDto, OverviewDto,
     PauseStateDto, SubsystemHealth, VersionInfoDto,
 };
 
@@ -57,13 +56,24 @@ pub async fn get_lifetime_roi() -> Result<LifetimeRoiDto, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// Composite endpoint for the Overview chart tile: USD value series for the
+/// given period + capital-event markers in that window + the trading-only
+/// P&L delta. One round-trip; see `OverviewChartDto`.
+#[server(name = GetOverviewChart, prefix = "/api", endpoint = "overview/chart")]
+pub async fn get_overview_chart(period: Option<String>) -> Result<OverviewChartDto, ServerFnError> {
+    let state = crate::server::ssr_state()?;
+    crate::server::api::charts::overview_chart(&state, period.as_deref().unwrap_or("30d"))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 #[component]
 pub fn OverviewPage() -> impl IntoView {
     let data = Resource::new(|| (), |_| async move { get_overview().await });
     let version = Resource::new(|| (), |_| async move { get_version_info().await });
     let value = Resource::new(
         || (),
-        |_| async move { get_account_value(Some("7d".into()), Some("usd".into())).await },
+        |_| async move { get_overview_chart(Some("30d".into())).await },
     );
     let pause_reload = RwSignal::new(0i32);
     let pause = Resource::new(
@@ -107,10 +117,10 @@ pub fn OverviewPage() -> impl IntoView {
                 }}
             </Suspense>
             <div class="tile">
-                <div class="tile-title">"Total value (USD, 7d)"</div>
+                <div class="tile-title">"Total value (USD, 30d)"</div>
                 <Suspense fallback=move || view! { <div class="h-32 text-slate-400">"Loading…"</div> }>
                     {move || value.get().map(|res| match res {
-                        Ok(s) => view! { <ValueSparkline series=s/> }.into_any(),
+                        Ok(d) => view! { <ValueSparkline data=d/> }.into_any(),
                         Err(e) => view! { <div class="text-rose-300">{e.to_string()}</div> }.into_any(),
                     })}
                 </Suspense>
@@ -454,9 +464,20 @@ fn format_signed_usd(raw: &str) -> String {
 }
 
 #[component]
-fn ValueSparkline(series: ChartSeries) -> impl IntoView {
+fn ValueSparkline(data: OverviewChartDto) -> impl IntoView {
+    let OverviewChartDto {
+        series,
+        markers,
+        trade_only_delta_usd,
+    } = data;
     view! {
-        <InteractiveLineChart points=series.points height=180 value_prefix="$"/>
+        <InteractiveLineChart
+            points=series.points
+            height=180
+            value_prefix="$"
+            markers=markers
+            trade_only_delta_usd=trade_only_delta_usd
+        />
     }
 }
 
