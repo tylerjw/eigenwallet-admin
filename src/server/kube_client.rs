@@ -29,6 +29,12 @@ impl KubeClient {
         Ok(Self { client })
     }
 
+    /// Clone of the underlying kube `Client`, for callers that want to build
+    /// their own typed `Api<T>` rather than going through the wrapper methods.
+    pub fn client(&self) -> Client {
+        self.client.clone()
+    }
+
     pub async fn read_configmap(&self, namespace: &str, name: &str) -> Result<ConfigMap> {
         let api: Api<ConfigMap> = Api::namespaced(self.client.clone(), namespace);
         api.get(name)

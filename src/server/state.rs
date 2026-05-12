@@ -6,6 +6,7 @@ use diesel_async::pooled_connection::bb8::Pool;
 use leptos::config::LeptosOptions;
 use tokio::sync::RwLock;
 
+use crate::server::api::version::VersionInfoCache;
 use crate::server::clients::asb::AsbClient;
 use crate::server::clients::cex::CexCache;
 use crate::server::clients::electrs::ElectrsClient;
@@ -86,6 +87,7 @@ pub struct AppStateInner {
     pub monerod: MonerodClient,
     pub electrs: ElectrsClient,
     pub cex: RwLock<CexCache>,
+    pub version_info: RwLock<VersionInfoCache>,
     pub kube: Option<KubeClient>,
     pub wallet_rules: WalletRulesHandle,
     pub leptos_options: LeptosOptions,
@@ -127,6 +129,7 @@ impl AppState {
             monerod,
             electrs,
             cex: RwLock::new(CexCache::default()),
+            version_info: RwLock::new(VersionInfoCache::default()),
             kube,
             wallet_rules: Arc::new(RwLock::new(WalletRulesCache::default())),
             leptos_options,

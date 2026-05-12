@@ -266,6 +266,21 @@ pub struct WalletRulesDto {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VersionInfoDto {
+    pub current: Option<String>,
+    pub latest: Option<String>,
+    pub has_update: bool,
+    pub releases_url: Option<String>,
+    pub fetch_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PauseStateDto {
+    pub is_paused: bool,
+    pub since: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub password: String,

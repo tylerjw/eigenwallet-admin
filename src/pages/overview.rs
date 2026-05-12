@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use crate::components::chart::InteractiveLineChart;
 use crate::components::tile::Tile;
 use crate::pages::charts::get_account_value;
-use crate::types::{ChartSeries, OverviewDto};
+use crate::types::{ChartSeries, OverviewDto, VersionInfoDto};
 
 #[server(name = GetOverview, prefix = "/api", endpoint = "overview")]
 pub async fn get_overview() -> Result<OverviewDto, ServerFnError> {
@@ -13,9 +13,18 @@ pub async fn get_overview() -> Result<OverviewDto, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+#[server(name = GetVersionInfo, prefix = "/api", endpoint = "version")]
+pub async fn get_version_info() -> Result<VersionInfoDto, ServerFnError> {
+    let state = crate::server::ssr_state()?;
+    crate::server::api::version::fetch(&state)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 #[component]
 pub fn OverviewPage() -> impl IntoView {
     let data = Resource::new(|| (), |_| async move { get_overview().await });
+    let version = Resource::new(|| (), |_| async move { get_version_info().await });
     let value = Resource::new(
         || (),
         |_| async move { get_account_value(Some("7d".into()), Some("usd".into())).await },
@@ -24,6 +33,12 @@ pub fn OverviewPage() -> impl IntoView {
     view! {
         <div class="space-y-6">
             <h1 class="text-2xl font-semibold">"Overview"</h1>
+            <Suspense fallback=move || view! { <VersionBannerLoading/> }>
+                {move || version.get().map(|res| match res {
+                    Ok(v) => view! { <VersionBanner info=v/> }.into_any(),
+                    Err(e) => view! { <VersionBannerError msg=e.to_string()/> }.into_any(),
+                })}
+            </Suspense>
             <Suspense fallback=move || view! { <Loading/> }>
                 {move || match data.get() {
                     None => view! { <Loading/> }.into_any(),
@@ -40,6 +55,73 @@ pub fn OverviewPage() -> impl IntoView {
                     })}
                 </Suspense>
             </div>
+        </div>
+    }
+}
+
+#[component]
+fn VersionBanner(info: VersionInfoDto) -> impl IntoView {
+    let current_label = info
+        .current
+        .clone()
+        .map(|v| format!("Eigenwallet v{v}"))
+        .unwrap_or_else(|| "Eigenwallet — version unknown".to_string());
+    let releases_url = info.releases_url.clone();
+    let latest = info.latest.clone();
+    let has_update = info.has_update;
+    let fetch_error = info.fetch_error.clone();
+
+    view! {
+        <div class="tile">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="text-sm font-medium text-slate-200">{current_label}</div>
+                {move || {
+                    if has_update {
+                        let url = releases_url.clone().unwrap_or_else(|| {
+                            "https://github.com/eigenwallet/eigenwallet/releases".into()
+                        });
+                        let label = format!(
+                            "↑ v{} available — view changelog",
+                            latest.clone().unwrap_or_default()
+                        );
+                        view! {
+                            <a
+                                class="text-sm text-emerald-300 hover:text-emerald-200 underline"
+                                href=url
+                                target="_blank"
+                                rel="noopener noreferrer"
+                            >
+                                {label}
+                            </a>
+                        }
+                        .into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }
+                }}
+            </div>
+            {fetch_error.map(|e| view! {
+                <div class="mt-1 text-xs text-amber-400">{e}</div>
+            })}
+        </div>
+    }
+}
+
+#[component]
+fn VersionBannerLoading() -> impl IntoView {
+    view! {
+        <div class="tile">
+            <div class="text-sm text-slate-400">"Eigenwallet — checking version…"</div>
+        </div>
+    }
+}
+
+#[component]
+fn VersionBannerError(msg: String) -> impl IntoView {
+    view! {
+        <div class="tile">
+            <div class="text-sm text-slate-200">"Eigenwallet — version unknown"</div>
+            <div class="mt-1 text-xs text-amber-400">{msg}</div>
         </div>
     }
 }

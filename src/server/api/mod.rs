@@ -12,4 +12,5 @@ pub mod overview;
 pub mod roi;
 pub mod spread;
 pub mod swaps;
+pub mod version;
 pub mod wallet_rules;
