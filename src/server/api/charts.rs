@@ -364,15 +364,34 @@ pub async fn overview_chart(state: &AppStateInner, period: &str) -> Result<Overv
         })
         .collect();
 
-    let trade_only_delta_usd = match attribution(state, period).await {
-        Ok(a) if a.sample_count >= 2 => a.trade_pnl_usd,
-        _ => String::new(),
-    };
+    let (trade_only_delta_usd, pnl_cum_usd, capital_cum_usd) =
+        match attribution(state, period).await {
+            Ok(a) if a.sample_count >= 2 => {
+                // Combine market_cum + trade_cum per sample for the chart's
+                // delta-from-start readout. Aligned 1:1 with series.points
+                // because both come from the same filtered snapshot set.
+                let pnl: Vec<String> = a
+                    .market_cum
+                    .iter()
+                    .zip(a.trade_cum.iter())
+                    .map(|(m, t)| {
+                        let m_v: Decimal = m.v.parse().unwrap_or(Decimal::ZERO);
+                        let t_v: Decimal = t.v.parse().unwrap_or(Decimal::ZERO);
+                        (m_v + t_v).to_string()
+                    })
+                    .collect();
+                let cap: Vec<String> = a.capital_cum.iter().map(|p| p.v.clone()).collect();
+                (a.trade_pnl_usd, pnl, cap)
+            }
+            _ => (String::new(), Vec::new(), Vec::new()),
+        };
 
     Ok(OverviewChartDto {
         series,
         markers,
         trade_only_delta_usd,
+        pnl_cum_usd,
+        capital_cum_usd,
     })
 }
 

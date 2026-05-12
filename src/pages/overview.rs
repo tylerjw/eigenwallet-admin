@@ -523,6 +523,8 @@ fn ValueSparkline(data: OverviewChartDto) -> impl IntoView {
         series,
         markers,
         trade_only_delta_usd,
+        pnl_cum_usd,
+        capital_cum_usd,
     } = data;
     view! {
         <InteractiveLineChart
@@ -531,6 +533,8 @@ fn ValueSparkline(data: OverviewChartDto) -> impl IntoView {
             value_prefix="$"
             markers=markers
             trade_only_delta_usd=trade_only_delta_usd
+            pnl_cum_usd=pnl_cum_usd
+            capital_cum_usd=capital_cum_usd
         />
     }
 }

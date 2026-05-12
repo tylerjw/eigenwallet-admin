@@ -139,6 +139,19 @@ pub struct OverviewChartDto {
     /// Signed decimal string of `trade_pnl_usd` from attribution. Empty
     /// string if attribution couldn't be computed (e.g. <2 snapshots).
     pub trade_only_delta_usd: String,
+    /// Cumulative `market_pnl + trade_pnl` USD per sample, aligned 1:1
+    /// with `series.points`. Lets the chart show a delta-from-start that
+    /// excludes new capital deposits/withdrawals — real return on capital,
+    /// not "you put more money in so the line went up". Empty if
+    /// attribution couldn't run.
+    #[serde(default)]
+    pub pnl_cum_usd: Vec<String>,
+    /// Cumulative external capital flow USD per sample (deposits +,
+    /// withdrawals −), aligned 1:1 with `series.points`. Used as the
+    /// denominator-grows-over-time for the chart's % readout. Empty if
+    /// attribution couldn't run.
+    #[serde(default)]
+    pub capital_cum_usd: Vec<String>,
 }
 
 /// P&L attribution: decomposes the change in total portfolio value over a

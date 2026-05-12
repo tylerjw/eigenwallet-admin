@@ -43,6 +43,12 @@ pub const USD_THEME: ChartTheme = ChartTheme {
 ///
 /// `trade_only_delta_usd` (optional) adds a second small line under the main
 /// delta readout: `"Trading only: +$XXX"`, colored green/red.
+///
+/// `pnl_cum_usd` + `capital_cum_usd` (both optional, must be the same length
+/// as `points` if supplied): when present, the delta readout shows
+/// `pnl_cum_usd[idx]` (market + trade P&L through the cursor) rather than
+/// raw `value[idx] - value[0]`, and the % is normalized by
+/// `value[0] + capital_cum_usd[idx]` so deposits don't tank the ratio.
 #[component]
 pub fn InteractiveLineChart(
     points: Vec<ChartPoint>,
@@ -52,6 +58,8 @@ pub fn InteractiveLineChart(
     #[prop(default = "$")] value_prefix: &'static str,
     #[prop(optional, into)] markers: Option<Vec<CapitalEventMarker>>,
     #[prop(optional, into)] trade_only_delta_usd: Option<String>,
+    #[prop(optional, into)] pnl_cum_usd: Option<Vec<String>>,
+    #[prop(optional, into)] capital_cum_usd: Option<Vec<String>>,
 ) -> impl IntoView {
     if points.is_empty() {
         return view! {
@@ -224,15 +232,46 @@ pub fn InteractiveLineChart(
                 .unwrap_or_default()
         }
     });
+    // If the caller passed pnl_cum + capital_cum aligned with the points
+    // series, use them so the delta excludes new deposits/withdrawals.
+    // Otherwise fall back to raw value-change-from-start.
+    let n_points = points_arc.len();
+    let pnl_arc: Option<Arc<Vec<f64>>> = pnl_cum_usd.filter(|v| v.len() == n_points).map(|v| {
+        Arc::new(
+            v.into_iter()
+                .map(|s| s.parse::<f64>().unwrap_or(0.0))
+                .collect(),
+        )
+    });
+    let cap_arc: Option<Arc<Vec<f64>>> = capital_cum_usd.filter(|v| v.len() == n_points).map(|v| {
+        Arc::new(
+            v.into_iter()
+                .map(|s| s.parse::<f64>().unwrap_or(0.0))
+                .collect(),
+        )
+    });
+
     let readout_delta_text = Memo::new({
         let ys = ys_arc.clone();
+        let pnl = pnl_arc.clone();
+        let cap = cap_arc.clone();
         move |_| {
             let idx = cursor.get().unwrap_or(last_idx);
-            let cur = ys.get(idx).copied().unwrap_or(0.0);
-            let start = ys.first().copied().unwrap_or(0.0);
-            let delta = cur - start;
-            let pct = if start.abs() > 1e-9 {
-                delta / start * 100.0
+            let (delta, denom) = match (&pnl, &cap) {
+                (Some(p), Some(c)) => {
+                    let start_val = ys.first().copied().unwrap_or(0.0);
+                    let d = p.get(idx).copied().unwrap_or(0.0);
+                    let basis = start_val + c.get(idx).copied().unwrap_or(0.0);
+                    (d, basis)
+                }
+                _ => {
+                    let cur = ys.get(idx).copied().unwrap_or(0.0);
+                    let start = ys.first().copied().unwrap_or(0.0);
+                    (cur - start, start)
+                }
+            };
+            let pct = if denom.abs() > 1e-9 {
+                delta / denom * 100.0
             } else {
                 0.0
             };
@@ -246,15 +285,18 @@ pub fn InteractiveLineChart(
     });
     let readout_delta_color = Memo::new({
         let ys = ys_arc.clone();
+        let pnl = pnl_arc.clone();
         move |_| {
             let idx = cursor.get().unwrap_or(last_idx);
-            let cur = ys.get(idx).copied().unwrap_or(0.0);
-            let start = ys.first().copied().unwrap_or(0.0);
-            if cur - start >= 0.0 {
-                theme.up
-            } else {
-                theme.down
-            }
+            let delta = match &pnl {
+                Some(p) => p.get(idx).copied().unwrap_or(0.0),
+                None => {
+                    let cur = ys.get(idx).copied().unwrap_or(0.0);
+                    let start = ys.first().copied().unwrap_or(0.0);
+                    cur - start
+                }
+            };
+            if delta >= 0.0 { theme.up } else { theme.down }
         }
     });
     let xs_for_x = xs_px.clone();
