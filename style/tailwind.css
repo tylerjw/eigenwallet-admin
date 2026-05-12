@@ -27,6 +27,8 @@
   .badge-ok    { @apply rounded bg-emerald-900/40 px-2 py-0.5 text-xs text-emerald-300; }
   .badge-warn  { @apply rounded bg-amber-900/40 px-2 py-0.5 text-xs text-amber-300; }
   .badge-err   { @apply rounded bg-rose-900/40 px-2 py-0.5 text-xs text-rose-300; }
+  .badge-info  { @apply rounded bg-sky-900/40 px-2 py-0.5 text-xs text-sky-300; }
+  .badge-muted { @apply rounded bg-slate-800/60 px-2 py-0.5 text-xs text-slate-300; }
   .btn {
     @apply inline-flex items-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50;
   }

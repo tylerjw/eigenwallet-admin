@@ -146,12 +146,7 @@ fn SwapsTable(rows: Vec<SwapRow>, total: i64, filter: SwapFilter) -> impl IntoVi
 
 #[component]
 fn SwapRowView(r: SwapRow) -> impl IntoView {
-    let cls = match r.state.as_str() {
-        "completed" => "badge-ok",
-        "refunded" | "active" | "in-progress" => "badge-warn",
-        "punished" => "badge-err",
-        _ => "badge-warn",
-    };
+    let cls = state_badge_class(&r.state);
     let peer_short = if r.peer_id.len() > 16 {
         format!("{}…{}", &r.peer_id[..8], &r.peer_id[r.peer_id.len() - 6..])
     } else {
@@ -169,5 +164,32 @@ fn SwapRowView(r: SwapRow) -> impl IntoView {
             <td class="py-2 pr-4">{r.started_at.format("%Y-%m-%d %H:%M").to_string()}</td>
             <td class="py-2 pr-4">{r.profit_usd.unwrap_or_else(|| "—".into())}</td>
         </tr>
+    }
+}
+
+/// Classify an asb state-string into a badge color. asb uses free-text
+/// states ("btc is redeemed", "bitcoin redeem transaction published",
+/// "xmr lock transfer proof sent", etc.) so we substring-match rather
+/// than enumerate.
+///
+/// - **green** (`badge-ok`): the swap settled in the maker's favor —
+///   either a clean redeem, or a punish that left the maker with both
+///   sides of the trade.
+/// - **amber** (`badge-warn`): refunded (no profit for the maker;
+///   some fees lost).
+/// - **rose** (`badge-err`): unknown problem / "cancel" branches that
+///   don't fit redeem/refund/punish.
+/// - **sky** (`badge-info`): in-flight states (lock, transfer-proof,
+///   redeem-tx-published-but-not-confirmed, etc.).
+fn state_badge_class(state: &str) -> &'static str {
+    let s = state.to_ascii_lowercase();
+    if s.contains("redeemed") || s.contains("punished") {
+        "badge-ok"
+    } else if s.contains("refunded") {
+        "badge-warn"
+    } else if s.contains("cancel") || s.contains("error") || s.contains("aborted") {
+        "badge-err"
+    } else {
+        "badge-info"
     }
 }
