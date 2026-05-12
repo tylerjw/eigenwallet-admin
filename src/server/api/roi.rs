@@ -5,9 +5,9 @@ use diesel_async::RunQueryDsl;
 use rust_decimal::Decimal;
 
 use crate::server::db;
-use crate::server::schema::balance_snapshots;
+use crate::server::schema::{balance_snapshots, capital_events};
 use crate::server::state::AppStateInner;
-use crate::types::RoiDto;
+use crate::types::{LifetimeRoiDto, RoiDto};
 
 pub async fn compute(
     state: &AppStateInner,
@@ -84,5 +84,94 @@ pub async fn compute(
         current_value: c.to_string(),
         pct_change: pct.to_string(),
         days_elapsed: days,
+    })
+}
+
+/// Lifetime ROI: signed sum of `usd_value_at_event` across all
+/// `capital_events` (deposits +, withdrawals −) compared against the
+/// latest `balance_snapshots.total_usd`. Capital events with NULL
+/// `usd_value_at_event` are skipped — the operator can fill them in
+/// later for a more accurate basis.
+pub async fn lifetime(state: &AppStateInner) -> Result<LifetimeRoiDto> {
+    let mut conn = db::checkout(&state.pool).await?;
+
+    let rows: Vec<(String, Option<Decimal>, DateTime<Utc>)> = capital_events::table
+        .filter(capital_events::usd_value_at_event.is_not_null())
+        .select((
+            capital_events::direction,
+            capital_events::usd_value_at_event,
+            capital_events::occurred_at,
+        ))
+        .load(&mut *conn)
+        .await?;
+
+    let mut deployed = Decimal::ZERO;
+    let mut since: Option<DateTime<Utc>> = None;
+    for (direction, usd, at) in &rows {
+        let Some(usd) = usd else { continue };
+        match direction.as_str() {
+            "deposit" => deployed += *usd,
+            "withdraw" => deployed -= *usd,
+            _ => continue,
+        }
+        since = Some(match since {
+            Some(s) if s <= *at => s,
+            _ => *at,
+        });
+    }
+    let event_count = rows.len() as i32;
+
+    let current_usd: Decimal = balance_snapshots::table
+        .select(balance_snapshots::total_usd)
+        .order(balance_snapshots::taken_at.desc())
+        .first::<Decimal>(&mut *conn)
+        .await
+        .optional()?
+        .unwrap_or(Decimal::ZERO);
+
+    let pnl = current_usd - deployed;
+    let roi_pct = if !deployed.is_zero() {
+        Some(
+            (pnl / deployed * Decimal::from(100))
+                .round_dp(2)
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    // Drop the connection before calling attribution — it checks out its own.
+    drop(conn);
+
+    // Decompose pnl into market (HODL) vs trade (swap spread captured)
+    // by running the full-history attribution. The chart already implements
+    // exactly this decomposition between successive snapshots.
+    let (market_pnl_usd, trade_pnl_usd) =
+        match crate::server::api::charts::attribution(state, "all").await {
+            Ok(a) => (
+                a.market_pnl_usd
+                    .parse::<Decimal>()
+                    .ok()
+                    .map(|d| d.round_dp(2).to_string()),
+                a.trade_pnl_usd
+                    .parse::<Decimal>()
+                    .ok()
+                    .map(|d| d.round_dp(2).to_string()),
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, "lifetime ROI attribution unavailable");
+                (None, None)
+            }
+        };
+
+    Ok(LifetimeRoiDto {
+        capital_deployed_usd: deployed.round_dp(2).to_string(),
+        current_value_usd: current_usd.round_dp(2).to_string(),
+        pnl_usd: pnl.round_dp(2).to_string(),
+        roi_pct,
+        since,
+        event_count,
+        market_pnl_usd,
+        trade_pnl_usd,
     })
 }

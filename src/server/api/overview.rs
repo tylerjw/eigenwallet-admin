@@ -1,6 +1,11 @@
 use anyhow::Result;
+use chrono::Duration as ChronoDuration;
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
 use rust_decimal::Decimal;
 
+use crate::server::db;
+use crate::server::schema::swaps;
 use crate::server::state::AppStateInner;
 use crate::types::{OverviewDto, QuoteDto, RegistrationDto, RendezvousRegistration};
 
@@ -19,6 +24,17 @@ pub async fn fetch(state: &AppStateInner) -> Result<OverviewDto> {
         .await
         .map(|v| v.iter().filter(|s| !s.completed).count() as i32)
         .unwrap_or(0);
+
+    let swaps_24h = {
+        let cutoff = chrono::Utc::now() - ChronoDuration::hours(24);
+        let mut conn = db::checkout(&state.pool).await?;
+        swaps::table
+            .filter(swaps::completed_at.ge(cutoff))
+            .count()
+            .get_result::<i64>(&mut *conn)
+            .await
+            .unwrap_or(0) as i32
+    };
 
     let snap = state.cex.read().await.last.clone();
     let btc_usd = snap.as_ref().and_then(|s| s.btc_usd);
@@ -81,6 +97,7 @@ pub async fn fetch(state: &AppStateInner) -> Result<OverviewDto> {
         peer_count: peers,
         registration,
         active_swaps,
+        swaps_24h,
         onion_addresses: multi.into_iter().filter(|a| a.contains(".onion")).collect(),
         current_quote,
         as_of: chrono::Utc::now(),

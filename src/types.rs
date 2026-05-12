@@ -14,6 +14,11 @@ pub struct OverviewDto {
     pub peer_count: Option<i32>,
     pub registration: Option<RegistrationDto>,
     pub active_swaps: i32,
+    /// Count of `swaps` rows with `completed_at` in the last 24h. Includes
+    /// both successful redemptions and refund/punish outcomes — for "how
+    /// busy was the market" we want all completions.
+    #[serde(default)]
+    pub swaps_24h: i32,
     pub onion_addresses: Vec<String>,
     pub current_quote: Option<QuoteDto>,
     pub as_of: DateTime<Utc>,
@@ -279,6 +284,35 @@ pub struct VersionInfoDto {
 pub struct PauseStateDto {
     pub is_paused: bool,
     pub since: Option<DateTime<Utc>>,
+}
+
+/// Lifetime ROI summary: capital deployed vs. current value, since the
+/// first recorded capital event. Distinct from the period-windowed `RoiDto`
+/// which compares two `balance_snapshots` and ignores capital flow.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LifetimeRoiDto {
+    /// Sum of signed `usd_value_at_event` across all capital_events
+    /// (deposits positive, withdrawals negative).
+    pub capital_deployed_usd: String,
+    /// Latest `balance_snapshots.total_usd`.
+    pub current_value_usd: String,
+    /// `current_value_usd - capital_deployed_usd`.
+    pub pnl_usd: String,
+    /// `pnl_usd / capital_deployed_usd * 100`, rounded to 2dp. Empty if
+    /// capital_deployed is zero.
+    pub roi_pct: Option<String>,
+    /// Earliest `occurred_at` from capital_events.
+    pub since: Option<DateTime<Utc>>,
+    /// Count of capital events used.
+    pub event_count: i32,
+    /// P&L from price moves on held holdings (HODL gain/loss). Sum over
+    /// snapshots of `holdings(t-1) × (price(t) - price(t-1))`. None if
+    /// attribution couldn't be computed (no snapshots).
+    pub market_pnl_usd: Option<String>,
+    /// P&L from swap activity — the spread the maker captured (or paid).
+    /// `end_value - start_value - market_pnl - capital_flow`. None if
+    /// attribution couldn't be computed.
+    pub trade_pnl_usd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -3,8 +3,10 @@ use leptos::prelude::*;
 use crate::components::chart::InteractiveLineChart;
 use crate::components::tile::Tile;
 use crate::pages::charts::get_account_value;
+use crate::pages::health::get_health;
 use crate::types::{
-    ChartSeries, MakerConfigUpdateResult, OverviewDto, PauseStateDto, VersionInfoDto,
+    ChartSeries, HealthDto, HealthState, LifetimeRoiDto, MakerConfigUpdateResult, OverviewDto,
+    PauseStateDto, SubsystemHealth, VersionInfoDto,
 };
 
 #[server(name = GetOverview, prefix = "/api", endpoint = "overview")]
@@ -47,6 +49,14 @@ pub async fn resume_maker() -> Result<MakerConfigUpdateResult, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+#[server(name = GetLifetimeRoi, prefix = "/api", endpoint = "roi/lifetime")]
+pub async fn get_lifetime_roi() -> Result<LifetimeRoiDto, ServerFnError> {
+    let state = crate::server::ssr_state()?;
+    crate::server::api::roi::lifetime(&state)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 #[component]
 pub fn OverviewPage() -> impl IntoView {
     let data = Resource::new(|| (), |_| async move { get_overview().await });
@@ -60,6 +70,8 @@ pub fn OverviewPage() -> impl IntoView {
         move || pause_reload.get(),
         |_| async move { get_pause_state().await },
     );
+    let roi = Resource::new(|| (), |_| async move { get_lifetime_roi().await });
+    let health = Resource::new(|| (), |_| async move { get_health().await });
 
     view! {
         <div class="space-y-6">
@@ -76,6 +88,26 @@ pub fn OverviewPage() -> impl IntoView {
                     Err(e) => view! {
                         <div class="tile border-amber-700 text-amber-300 text-sm">
                             {format!("Pause state unavailable: {e}")}
+                        </div>
+                    }.into_any(),
+                })}
+            </Suspense>
+            <Suspense fallback=move || view! { <div class="text-sm text-slate-500">"Checking health…"</div> }>
+                {move || health.get().map(|res| match res {
+                    Ok(h) => view! { <HealthBanner data=h/> }.into_any(),
+                    Err(e) => view! {
+                        <div class="tile border-amber-700 text-amber-300 text-sm">
+                            {format!("Health check unavailable: {e}")}
+                        </div>
+                    }.into_any(),
+                })}
+            </Suspense>
+            <Suspense fallback=move || view! { <div class="text-sm text-slate-500">"Loading ROI…"</div> }>
+                {move || roi.get().map(|res| match res {
+                    Ok(r) => view! { <LifetimeRoiTile data=r/> }.into_any(),
+                    Err(e) => view! {
+                        <div class="tile border-amber-700 text-amber-300 text-sm">
+                            {format!("Lifetime ROI unavailable: {e}")}
                         </div>
                     }.into_any(),
                 })}
@@ -271,6 +303,144 @@ fn VersionBannerError(msg: String) -> impl IntoView {
 }
 
 #[component]
+fn HealthBanner(data: HealthDto) -> impl IntoView {
+    let subs: Vec<(&'static str, SubsystemHealth)> = vec![
+        ("asb", data.asb),
+        ("bitcoind", data.bitcoind),
+        ("monerod", data.monerod),
+        ("electrs", data.electrs),
+        ("tor", data.tor),
+        ("peers", data.peers),
+        ("rendezvous", data.rendezvous),
+        ("admin-db", data.admin_db),
+    ];
+    let worst = subs
+        .iter()
+        .map(|(_, s)| s.state)
+        .max_by_key(|s| match s {
+            HealthState::Ok => 0,
+            HealthState::Degraded => 1,
+            HealthState::Unknown => 2,
+            HealthState::Down => 3,
+        })
+        .unwrap_or(HealthState::Unknown);
+    let (border, dot, label) = match worst {
+        HealthState::Ok => (
+            "border-emerald-700",
+            "bg-emerald-400",
+            "All systems operational",
+        ),
+        HealthState::Degraded => ("border-amber-700", "bg-amber-400", "Degraded"),
+        HealthState::Down => ("border-rose-700", "bg-rose-500", "Problem detected"),
+        HealthState::Unknown => ("border-slate-600", "bg-slate-400", "Status unknown"),
+    };
+    let bad: Vec<(&'static str, SubsystemHealth)> = subs
+        .into_iter()
+        .filter(|(_, s)| !matches!(s.state, HealthState::Ok))
+        .collect();
+
+    view! {
+        <div class=format!("tile {border}")>
+            <div class="flex items-center gap-2">
+                <span class=format!("inline-block w-2.5 h-2.5 rounded-full {dot}")></span>
+                <div class="text-sm font-medium text-slate-200">{label}</div>
+                <a href="/health" class="ml-auto text-xs text-slate-400 hover:text-slate-200 underline">"details"</a>
+            </div>
+            {(!bad.is_empty()).then(|| view! {
+                <ul class="mt-2 space-y-1 text-xs">
+                    {bad.into_iter().map(|(name, s)| {
+                        let color = match s.state {
+                            HealthState::Down => "text-rose-300",
+                            HealthState::Degraded => "text-amber-300",
+                            _ => "text-slate-300",
+                        };
+                        view! {
+                            <li class=color>
+                                <span class="font-medium">{name}</span>": "{s.headline}
+                            </li>
+                        }
+                    }).collect_view()}
+                </ul>
+            })}
+        </div>
+    }
+}
+
+#[component]
+fn LifetimeRoiTile(data: LifetimeRoiDto) -> impl IntoView {
+    // Parse PnL sign for color. roi_pct mirrors the sign so we key off it.
+    let pnl_neg = data.pnl_usd.trim_start().starts_with('-');
+    let pnl_zero = data.pnl_usd == "0" || data.pnl_usd == "0.00";
+    let big_class = if pnl_zero {
+        "text-2xl font-semibold text-slate-200"
+    } else if pnl_neg {
+        "text-2xl font-semibold text-rose-300"
+    } else {
+        "text-2xl font-semibold text-emerald-300"
+    };
+    let headline = match &data.roi_pct {
+        Some(p) if !pnl_neg && !pnl_zero => format!("+{p}%"),
+        Some(p) => format!("{p}%"),
+        None => "—".into(),
+    };
+    let pnl_label = if pnl_neg {
+        format!("−${}", data.pnl_usd.trim_start_matches('-'))
+    } else {
+        format!("+${}", data.pnl_usd)
+    };
+    let since_str = data
+        .since
+        .map(|t| t.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "—".into());
+    let primary = if data.event_count == 0 {
+        "No capital events recorded yet — add some on the ROI page to see lifetime returns."
+            .to_string()
+    } else {
+        format!(
+            "Capital deployed: ${}  ·  Current value: ${}  ·  P&L: {}  ·  Since {} ({} event{})",
+            data.capital_deployed_usd,
+            data.current_value_usd,
+            pnl_label,
+            since_str,
+            data.event_count,
+            if data.event_count == 1 { "" } else { "s" },
+        )
+    };
+    let breakdown = match (&data.market_pnl_usd, &data.trade_pnl_usd) {
+        (Some(m), Some(t)) => Some(format!(
+            "of which {} from holding (price moves) and {} from swaps",
+            format_signed_usd(m),
+            format_signed_usd(t),
+        )),
+        _ => None,
+    };
+
+    view! {
+        <div class="tile">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+                <div class="tile-title">"Lifetime ROI"</div>
+                <div class=big_class>{headline}</div>
+            </div>
+            <div class="mt-1 text-xs text-slate-400">{primary}</div>
+            {breakdown.map(|b| view! {
+                <div class="mt-0.5 text-xs text-slate-500">{b}</div>
+            })}
+        </div>
+    }
+}
+
+fn format_signed_usd(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix('-') {
+        format!("−${rest}")
+    } else if trimmed == "0" || trimmed == "0.00" {
+        format!("${trimmed}")
+    } else {
+        format!("+${trimmed}")
+    }
+}
+
+#[component]
 fn ValueSparkline(series: ChartSeries) -> impl IntoView {
     view! {
         <InteractiveLineChart points=series.points height=180 value_prefix="$"/>
@@ -286,31 +456,6 @@ fn OverviewBody(data: OverviewDto) -> impl IntoView {
         .clone()
         .map(|v| format!("${}", trim_decimal(&v, 2)))
         .unwrap_or_else(|| "—".into());
-    let peer_count = data
-        .peer_count
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "—".into());
-    let reg_text = data
-        .registration
-        .as_ref()
-        .map(|r| format!("{}/{}", r.registered, r.total))
-        .unwrap_or_else(|| "—".into());
-    let reg_subtitle = data
-        .registration
-        .as_ref()
-        .map(|r| {
-            format!(
-                "registered at {} of {} configured rendezvous nodes — peers discover us via these",
-                r.registered, r.total
-            )
-        })
-        .unwrap_or_else(|| "rendezvous nodes peers use to discover us".into());
-    let onion_subtitle = if data.onion_addresses.is_empty() {
-        "no hidden-service address yet — Tor still bootstrapping".to_string()
-    } else {
-        "Tor hidden-service is published — peers can reach us via .onion".to_string()
-    };
-
     view! {
         <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
             <Tile title="BTC balance" subtitle="spendable BTC in the maker wallet">{btc}</Tile>
@@ -319,8 +464,9 @@ fn OverviewBody(data: OverviewDto) -> impl IntoView {
             <Tile title="Active swaps" subtitle="swaps still in progress (not yet redeemed/refunded)">
                 {data.active_swaps.to_string()}
             </Tile>
-            <Tile title="Peers" subtitle="active libp2p connections">{peer_count}</Tile>
-            <Tile title="Rendezvous" subtitle=reg_subtitle>{reg_text}</Tile>
+            <Tile title="Swaps (24h)" subtitle="completed swaps in the last 24 hours (redeem/refund/punish)">
+                {data.swaps_24h.to_string()}
+            </Tile>
             <Tile title="Spread" subtitle="our quoted price vs. CEX mid (positive = we charge a premium for XMR)">
                 {data
                     .current_quote
@@ -328,13 +474,6 @@ fn OverviewBody(data: OverviewDto) -> impl IntoView {
                     .and_then(|q| q.spread_pct.clone())
                     .map(|s| format!("+{}%", trim_decimal(&s, 2)))
                     .unwrap_or_else(|| "—".into())}
-            </Tile>
-            <Tile title="Onion" subtitle=onion_subtitle>
-                {if data.onion_addresses.is_empty() {
-                    "—".to_string()
-                } else {
-                    "reachable".to_string()
-                }}
             </Tile>
         </div>
         <p class="text-xs text-slate-500">
