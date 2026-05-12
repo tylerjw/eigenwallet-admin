@@ -6,6 +6,7 @@ mod cex_prices;
 mod competitor_scan;
 mod kraken_backfill;
 mod log_tail;
+mod snapshot_backfill;
 mod swap_sync;
 
 use crate::server::state::AppState;
@@ -21,8 +22,11 @@ pub fn spawn_all(state: AppState) {
     ));
     let backfill_state = state.clone();
     tokio::spawn(async move {
-        if let Err(e) = kraken_backfill::run_once(backfill_state).await {
+        if let Err(e) = kraken_backfill::run_once(backfill_state.clone()).await {
             tracing::warn!(error = %e, "kraken ohlc backfill failed");
+        }
+        if let Err(e) = snapshot_backfill::run_once(backfill_state).await {
+            tracing::warn!(error = %e, "balance snapshot backfill failed");
         }
     });
     tokio::spawn(competitor_scan::run(state));
