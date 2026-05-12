@@ -124,13 +124,19 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .filter(|r| !r.3.is_zero() && !r.4.is_zero() && !r.5.is_zero())
         .collect();
 
-    // Pull asset + amount so we can fill in missing usd_value_at_event from
-    // the nearest snapshot price. Without this, NULL-USD capital events
-    // silently contribute zero to cum_capital and the trade-PnL residual
-    // absorbs the missing capital — wrongly inflating "trades captured".
+    // Only USD-asset events count as external capital flow. BTC/XMR rows
+    // represent transfers between an off-system account (e.g. Kraken) and
+    // the maker wallet — their value already moves through holdings × CEX
+    // price, so counting their USD valuation in `cum_capital` would
+    // double-count the same dollars and leak ~$capital_basis of negative
+    // trade-PnL into the residual.
+    //
+    // If you ever directly deposit BTC/XMR from outside Kraken, record it
+    // as a USD event with the dollar value at deposit time.
     type CapitalRow = (DateTime<Utc>, String, String, Decimal, Option<Decimal>);
     let cap_events: Vec<CapitalRow> = capital_events::table
         .filter(capital_events::occurred_at.ge(since))
+        .filter(capital_events::asset.eq("USD"))
         .select((
             capital_events::occurred_at,
             capital_events::direction,

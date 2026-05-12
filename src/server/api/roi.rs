@@ -87,15 +87,16 @@ pub async fn compute(
     })
 }
 
-/// Lifetime ROI: signed sum of `usd_value_at_event` across all
+/// Lifetime ROI: signed sum of `usd_value_at_event` across USD-asset
 /// `capital_events` (deposits +, withdrawals −) compared against the
-/// latest `balance_snapshots.total_usd`. Capital events with NULL
-/// `usd_value_at_event` are skipped — the operator can fill them in
-/// later for a more accurate basis.
+/// latest `balance_snapshots.total_usd`. Only USD events count as
+/// external capital — BTC/XMR rows model Kraken⇄wallet transfers of
+/// dollars already counted, so including them double-counts the basis.
 pub async fn lifetime(state: &AppStateInner) -> Result<LifetimeRoiDto> {
     let mut conn = db::checkout(&state.pool).await?;
 
     let rows: Vec<(String, Option<Decimal>, DateTime<Utc>)> = capital_events::table
+        .filter(capital_events::asset.eq("USD"))
         .filter(capital_events::usd_value_at_event.is_not_null())
         .select((
             capital_events::direction,
