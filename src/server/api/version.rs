@@ -1,8 +1,13 @@
 //! Eigenwallet (asb) version info: reads the running image tag from the
 //! `asb` Deployment in the `eigenwallet` namespace and compares it to the
-//! latest release on GitHub. The GitHub response is cached in
-//! `AppStateInner` for 1 hour to stay well under the 60/hr/IP
-//! unauthenticated rate limit.
+//! latest tag on GitHub. The GitHub response is cached in `AppStateInner`
+//! for 1 hour to stay well under the 60/hr/IP unauthenticated rate limit.
+//!
+//! Note: `eigenwallet/core` publishes git tags (some via GitHub Releases,
+//! some not — and some tags like `preview`/`gui-preview`/`test-…`/`v0.x`
+//! aren't release versions at all). To stay robust we list tags and pick
+//! the highest numeric `X.Y.Z` (or `X.Y.Z.W…`) that parses cleanly,
+//! ignoring everything else.
 
 use std::time::{Duration, Instant};
 
@@ -14,8 +19,7 @@ use serde::Deserialize;
 use crate::server::state::AppStateInner;
 use crate::types::VersionInfoDto;
 
-const GITHUB_LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/eigenwallet/eigenwallet/releases/latest";
+const GITHUB_TAGS_URL: &str = "https://api.github.com/repos/eigenwallet/core/tags?per_page=30";
 const USER_AGENT: &str = "eigenwallet-admin";
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -144,16 +148,15 @@ async fn cached_or_fetch_latest(state: &AppStateInner) -> Result<GithubReleaseIn
 
 async fn fetch_latest_release() -> Result<GithubReleaseInfo> {
     #[derive(Deserialize)]
-    struct Resp {
-        tag_name: String,
-        html_url: String,
+    struct TagEntry {
+        name: String,
     }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .build()?;
-    let resp: Resp = client
-        .get(GITHUB_LATEST_RELEASE_URL)
+    let tags: Vec<TagEntry> = client
+        .get(GITHUB_TAGS_URL)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .send()
@@ -161,10 +164,15 @@ async fn fetch_latest_release() -> Result<GithubReleaseInfo> {
         .error_for_status()?
         .json()
         .await?;
-    Ok(GithubReleaseInfo {
-        tag_name: resp.tag_name,
-        html_url: resp.html_url,
-    })
+
+    let best = tags
+        .into_iter()
+        .filter_map(|t| parse_numeric_version(&t.name).map(|parsed| (parsed, t.name)))
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .ok_or_else(|| anyhow!("no numeric version tags found"))?;
+    let tag_name = best.1;
+    let html_url = format!("https://github.com/eigenwallet/core/releases/tag/{tag_name}");
+    Ok(GithubReleaseInfo { tag_name, html_url })
 }
 
 /// Strip optional leading `v` from a tag. `v4.5.0` -> `4.5.0`.
@@ -234,5 +242,30 @@ mod tests {
         assert_eq!(compare_versions("4.6.0", "4.5.99"), Some(Ordering::Greater));
         // Different segment counts: 4.5 < 4.5.1
         assert_eq!(compare_versions("4.5", "4.5.1"), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn picks_highest_numeric_tag_from_mixed_list() {
+        // Mirrors the real eigenwallet/core /tags response: a mix of semver
+        // tags (some `v`-prefixed for older 0.x), preview markers, and
+        // test-runner detritus. We should pick `4.5.3`.
+        let raw = [
+            "v0.3",
+            "v0.2",
+            "v0.1",
+            "test-21dfabe8-20260507140135",
+            "preview",
+            "gui-preview",
+            "4.5.3",
+            "4.5.2",
+            "4.5.1",
+            "4.5.0",
+        ];
+        let best = raw
+            .into_iter()
+            .filter_map(|n| parse_numeric_version(n).map(|p| (p, n.to_string())))
+            .max_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, n)| n);
+        assert_eq!(best.as_deref(), Some("4.5.3"));
     }
 }

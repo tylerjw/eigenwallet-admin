@@ -76,22 +76,6 @@ pub fn OverviewPage() -> impl IntoView {
     view! {
         <div class="space-y-6">
             <h1 class="text-2xl font-semibold">"Overview"</h1>
-            <Suspense fallback=move || view! { <VersionBannerLoading/> }>
-                {move || version.get().map(|res| match res {
-                    Ok(v) => view! { <VersionBanner info=v/> }.into_any(),
-                    Err(e) => view! { <VersionBannerError msg=e.to_string()/> }.into_any(),
-                })}
-            </Suspense>
-            <Suspense fallback=move || view! { <div class="text-slate-500 text-sm">"Checking maker state…"</div> }>
-                {move || pause.get().map(|res| match res {
-                    Ok(s) => view! { <PauseBanner state=s reload=pause_reload/> }.into_any(),
-                    Err(e) => view! {
-                        <div class="tile border-amber-700 text-amber-300 text-sm">
-                            {format!("Pause state unavailable: {e}")}
-                        </div>
-                    }.into_any(),
-                })}
-            </Suspense>
             <Suspense fallback=move || view! { <div class="text-sm text-slate-500">"Checking health…"</div> }>
                 {move || health.get().map(|res| match res {
                     Ok(h) => view! { <HealthBanner data=h/> }.into_any(),
@@ -113,10 +97,13 @@ pub fn OverviewPage() -> impl IntoView {
                 })}
             </Suspense>
             <Suspense fallback=move || view! { <Loading/> }>
-                {move || match data.get() {
-                    None => view! { <Loading/> }.into_any(),
-                    Some(Err(e)) => view! { <ErrorBox msg=e.to_string()/> }.into_any(),
-                    Some(Ok(d)) => view! { <OverviewBody data=d/> }.into_any(),
+                {move || {
+                    let v = version.get();
+                    match data.get() {
+                        None => view! { <Loading/> }.into_any(),
+                        Some(Err(e)) => view! { <ErrorBox msg=e.to_string()/> }.into_any(),
+                        Some(Ok(d)) => view! { <OverviewBody data=d version=v/> }.into_any(),
+                    }
                 }}
             </Suspense>
             <div class="tile">
@@ -128,6 +115,16 @@ pub fn OverviewPage() -> impl IntoView {
                     })}
                 </Suspense>
             </div>
+            <Suspense fallback=move || view! { <div class="text-slate-500 text-sm">"Checking maker state…"</div> }>
+                {move || pause.get().map(|res| match res {
+                    Ok(s) => view! { <PauseBanner state=s reload=pause_reload/> }.into_any(),
+                    Err(e) => view! {
+                        <div class="tile border-amber-700 text-amber-300 text-sm">
+                            {format!("Pause state unavailable: {e}")}
+                        </div>
+                    }.into_any(),
+                })}
+            </Suspense>
         </div>
     }
 }
@@ -235,69 +232,85 @@ fn PauseBanner(state: PauseStateDto, reload: RwSignal<i32>) -> impl IntoView {
     }
 }
 
+/// Render the version info as a metric tile. The big value is the running
+/// version (`v4.5.3`), the subtitle either links to the changelog when an
+/// update is available, says "up to date" when we're current, or surfaces a
+/// soft amber "couldn't check for updates" if either the kube read or the
+/// GitHub fetch failed. The raw error string is intentionally not shown —
+/// it lives in tracing logs.
 #[component]
-fn VersionBanner(info: VersionInfoDto) -> impl IntoView {
-    let current_label = info
+fn VersionTile(info: VersionInfoDto) -> impl IntoView {
+    let big = info
         .current
-        .clone()
-        .map(|v| format!("Eigenwallet v{v}"))
-        .unwrap_or_else(|| "Eigenwallet — version unknown".to_string());
-    let releases_url = info.releases_url.clone();
-    let latest = info.latest.clone();
-    let has_update = info.has_update;
-    let fetch_error = info.fetch_error.clone();
+        .as_deref()
+        .map(|v| format!("v{v}"))
+        .unwrap_or_else(|| "—".to_string());
 
-    view! {
-        <div class="tile">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-                <div class="text-sm font-medium text-slate-200">{current_label}</div>
-                {move || {
-                    if has_update {
-                        let url = releases_url.clone().unwrap_or_else(|| {
-                            "https://github.com/eigenwallet/eigenwallet/releases".into()
-                        });
-                        let label = format!(
-                            "↑ v{} available — view changelog",
-                            latest.clone().unwrap_or_default()
-                        );
-                        view! {
-                            <a
-                                class="text-sm text-emerald-300 hover:text-emerald-200 underline"
-                                href=url
-                                target="_blank"
-                                rel="noopener noreferrer"
-                            >
-                                {label}
-                            </a>
-                        }
-                        .into_any()
-                    } else {
-                        view! { <span></span> }.into_any()
-                    }
-                }}
+    let subtitle_view = if info.fetch_error.is_some() {
+        view! {
+            <div class="mt-1 text-xs text-amber-400">
+                "couldn't check for updates"
             </div>
-            {fetch_error.map(|e| view! {
-                <div class="mt-1 text-xs text-amber-400">{e}</div>
-            })}
+        }
+        .into_any()
+    } else if info.has_update {
+        let url = info
+            .releases_url
+            .clone()
+            .unwrap_or_else(|| "https://github.com/eigenwallet/core/tags".into());
+        let label = format!("↑ v{} — view changelog", info.latest.unwrap_or_default());
+        view! {
+            <div class="mt-1 text-xs">
+                <a
+                    class="text-emerald-300 hover:text-emerald-200 underline"
+                    href=url
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    {label}
+                </a>
+            </div>
+        }
+        .into_any()
+    } else if info.current.is_some() {
+        view! {
+            <div class="mt-1 text-xs text-slate-500">"up to date"</div>
+        }
+        .into_any()
+    } else {
+        view! {
+            <div class="mt-1 text-xs text-slate-500">"version unknown"</div>
+        }
+        .into_any()
+    };
+
+    view! {
+        <div class="tile">
+            <div class="tile-title">"Eigenwallet"</div>
+            <div class="tile-value">{big}</div>
+            {subtitle_view}
         </div>
     }
 }
 
 #[component]
-fn VersionBannerLoading() -> impl IntoView {
+fn VersionTileLoading() -> impl IntoView {
     view! {
         <div class="tile">
-            <div class="text-sm text-slate-400">"Eigenwallet — checking version…"</div>
+            <div class="tile-title">"Eigenwallet"</div>
+            <div class="tile-value text-slate-400">"…"</div>
+            <div class="mt-1 text-xs text-slate-500">"checking version"</div>
         </div>
     }
 }
 
 #[component]
-fn VersionBannerError(msg: String) -> impl IntoView {
+fn VersionTileError() -> impl IntoView {
     view! {
         <div class="tile">
-            <div class="text-sm text-slate-200">"Eigenwallet — version unknown"</div>
-            <div class="mt-1 text-xs text-amber-400">{msg}</div>
+            <div class="tile-title">"Eigenwallet"</div>
+            <div class="tile-value">"—"</div>
+            <div class="mt-1 text-xs text-amber-400">"couldn't check for updates"</div>
         </div>
     }
 }
@@ -448,7 +461,12 @@ fn ValueSparkline(series: ChartSeries) -> impl IntoView {
 }
 
 #[component]
-fn OverviewBody(data: OverviewDto) -> impl IntoView {
+fn OverviewBody(
+    data: OverviewDto,
+    /// Optional version-info resource value; rendered as the first tile in
+    /// the grid. `None` -> not loaded yet, `Some(Err)` -> server-fn failure.
+    version: Option<Result<VersionInfoDto, ServerFnError>>,
+) -> impl IntoView {
     let btc = format_btc(data.btc_balance_sat);
     let xmr = format_xmr(&data.xmr_balance_atomic);
     let total_usd = data
@@ -456,8 +474,14 @@ fn OverviewBody(data: OverviewDto) -> impl IntoView {
         .clone()
         .map(|v| format!("${}", trim_decimal(&v, 2)))
         .unwrap_or_else(|| "—".into());
+    let version_tile = match version {
+        None => view! { <VersionTileLoading/> }.into_any(),
+        Some(Ok(info)) => view! { <VersionTile info=info/> }.into_any(),
+        Some(Err(_)) => view! { <VersionTileError/> }.into_any(),
+    };
     view! {
         <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+            {version_tile}
             <Tile title="BTC balance" subtitle="spendable BTC in the maker wallet">{btc}</Tile>
             <Tile title="XMR balance" subtitle="spendable XMR in the maker wallet">{xmr}</Tile>
             <Tile title="Total (USD)" subtitle="BTC + XMR valued at the latest CEX mid">{total_usd}</Tile>
