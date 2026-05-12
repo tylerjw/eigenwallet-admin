@@ -74,6 +74,31 @@ async fn run_once(state: &AppState) -> anyhow::Result<()> {
         }
     }
 
+    // Don't restart asb under an in-flight swap. The recommendation is
+    // already persisted; we just defer the ConfigMap write until the
+    // wallet is quiet so the inevitable pod roll doesn't disrupt a
+    // settling swap. The manual "Apply now" button bypasses this — an
+    // operator clicking it has made an informed call.
+    //
+    // Note: asb.get_swaps() filters out swaps with regressed state
+    // histories (the `Skipping swap with unexpected state history` case).
+    // If a swap is in that state we'll miss it here and apply anyway —
+    // acceptable for v1, those situations are rare and upstream-filtered.
+    let in_flight = state
+        .0
+        .asb
+        .get_swaps()
+        .await
+        .map(|v| v.iter().any(|s| !s.completed))
+        .unwrap_or(false);
+    if in_flight {
+        tracing::info!(
+            id,
+            "spread-optimizer: in-flight swap detected, deferring auto-apply",
+        );
+        return Ok(());
+    }
+
     tracing::info!(
         id,
         current = %rec.current_spread,
