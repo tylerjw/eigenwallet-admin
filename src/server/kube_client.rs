@@ -50,8 +50,14 @@ impl KubeClient {
         value: &str,
     ) -> Result<()> {
         let api: Api<ConfigMap> = Api::namespaced(self.client.clone(), namespace);
+        // Server-side apply (Patch::Apply) requires apiVersion + kind in the
+        // patch body. Without them the apiserver returns
+        // `invalid object type: /, Kind=: BadRequest`.
         let patch = json!({
-            "data": { key: value }
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": name },
+            "data": { key: value },
         });
         api.patch(
             name,
