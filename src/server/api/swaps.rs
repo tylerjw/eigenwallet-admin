@@ -145,8 +145,11 @@ fn nearest_cex_price(prices: &[CexPrice], at: DateTime<Utc>) -> Option<&CexPrice
     if prices.is_empty() {
         return None;
     }
-    // Linear scan; prices is sorted asc by sampled_at. A binary search would
-    // be O(log n) but n is small.
+    // Linear scan; prices is sorted asc by sampled_at. Returns the nearest
+    // sample regardless of gap — for swaps that completed before our pod was
+    // recording prices we use the earliest sample as a coarse approximation.
+    // The Right Thing for old swaps is a Kraken OHLC backfill (see task #30);
+    // until that ships, this gets us *something* in the profit_usd column.
     let mut best: Option<&CexPrice> = None;
     let mut best_gap = i64::MAX;
     for p in prices {
@@ -156,8 +159,7 @@ fn nearest_cex_price(prices: &[CexPrice], at: DateTime<Utc>) -> Option<&CexPrice
             best = Some(p);
         }
     }
-    // If the nearest sample is more than 2 hours away, we don't trust it.
-    if best_gap > 7200 { None } else { best }
+    best
 }
 
 // Mark `sql` as used so clippy doesn't complain when no SQL literal is used.
