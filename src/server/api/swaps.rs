@@ -38,7 +38,11 @@ pub async fn list(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<SwapListDto> {
-    let limit = limit.unwrap_or(50).clamp(1, 500);
+    // `limit = None` means "load everything matching the filter" — the UI has
+    // no pager and the operator wants to see every row in one render. For our
+    // scale (a few thousand swaps over the maker's lifetime) this is cheap.
+    // When a limit IS supplied (e.g. future paging) we clamp it defensively.
+    let limit = limit.map(|l| l.clamp(1, 5000));
     let offset = offset.unwrap_or(0).max(0);
     let mut conn = db::checkout(&state.pool).await?;
 
@@ -58,23 +62,38 @@ pub async fn list(
         None => swaps::table.count().get_result(&mut *conn).await?,
     };
 
-    let rows: Vec<Swap> = match predicate {
-        Some(p) => {
+    let rows: Vec<Swap> = match (predicate, limit) {
+        (Some(p), Some(lim)) => {
             swaps::table
                 .filter(p)
                 .select(Swap::as_select())
                 .order(swaps::started_at.desc())
-                .limit(limit)
+                .limit(lim)
                 .offset(offset)
                 .load(&mut *conn)
                 .await?
         }
-        None => {
+        (Some(p), None) => {
+            swaps::table
+                .filter(p)
+                .select(Swap::as_select())
+                .order(swaps::started_at.desc())
+                .load(&mut *conn)
+                .await?
+        }
+        (None, Some(lim)) => {
             swaps::table
                 .select(Swap::as_select())
                 .order(swaps::started_at.desc())
-                .limit(limit)
+                .limit(lim)
                 .offset(offset)
+                .load(&mut *conn)
+                .await?
+        }
+        (None, None) => {
+            swaps::table
+                .select(Swap::as_select())
+                .order(swaps::started_at.desc())
                 .load(&mut *conn)
                 .await?
         }

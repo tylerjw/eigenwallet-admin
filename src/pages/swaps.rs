@@ -14,23 +14,61 @@ pub async fn get_swaps(
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// The set of filter tokens recognised by the server. Each variant maps to a
+/// substring predicate against `swaps.state` (see `build_state_predicate` in
+/// `src/server/api/swaps.rs`). We keep this as a plain enum on the client so
+/// the filter signal carries a `Copy` value, sidesteps any `Option<String>`
+/// clone gymnastics in event handlers, and gives the buttons a single source
+/// of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwapFilter {
+    All,
+    Active,
+    Completed,
+    Refunded,
+    Punished,
+}
+
+impl SwapFilter {
+    fn label(self) -> &'static str {
+        match self {
+            SwapFilter::All => "all",
+            SwapFilter::Active => "active",
+            SwapFilter::Completed => "completed",
+            SwapFilter::Refunded => "refunded",
+            SwapFilter::Punished => "punished",
+        }
+    }
+
+    /// The token the server-side filter expects, or `None` for "all".
+    fn token(self) -> Option<String> {
+        match self {
+            SwapFilter::All => None,
+            other => Some(other.label().to_string()),
+        }
+    }
+}
+
 #[component]
 pub fn SwapsPage() -> impl IntoView {
-    let filter = RwSignal::new(Option::<String>::None);
+    let filter = RwSignal::new(SwapFilter::All);
     let data = Resource::new(
         move || filter.get(),
-        |f| async move { get_swaps(f, Some(50), Some(0)).await },
+        // No limit/offset: render every matching row. The dataset is small
+        // (a few thousand swaps over the maker's lifetime) so a single
+        // full-page render is fine and there's no pager UI to drive paging.
+        |f| async move { get_swaps(f.token(), None, None).await },
     );
 
     view! {
         <div class="space-y-4">
             <h1 class="text-2xl font-semibold">"Swaps"</h1>
             <div class="flex gap-2">
-                <FilterButton current=filter label="all" value=None/>
-                <FilterButton current=filter label="active" value=Some("active")/>
-                <FilterButton current=filter label="completed" value=Some("completed")/>
-                <FilterButton current=filter label="refunded" value=Some("refunded")/>
-                <FilterButton current=filter label="punished" value=Some("punished")/>
+                <FilterButton current=filter value=SwapFilter::All/>
+                <FilterButton current=filter value=SwapFilter::Active/>
+                <FilterButton current=filter value=SwapFilter::Completed/>
+                <FilterButton current=filter value=SwapFilter::Refunded/>
+                <FilterButton current=filter value=SwapFilter::Punished/>
             </div>
             <Suspense fallback=move || view! { <div class="text-slate-400">"Loading…"</div> }>
                 {move || match data.get() {
@@ -38,7 +76,10 @@ pub fn SwapsPage() -> impl IntoView {
                     Some(Err(e)) => {
                         view! { <div class="tile text-rose-300">{e.to_string()}</div> }.into_any()
                     }
-                    Some(Ok(d)) => view! { <SwapsTable rows=d.rows total=d.total/> }.into_any(),
+                    Some(Ok(d)) => {
+                        let f = filter.get();
+                        view! { <SwapsTable rows=d.rows total=d.total filter=f/> }.into_any()
+                    }
                 }}
             </Suspense>
         </div>
@@ -46,30 +87,39 @@ pub fn SwapsPage() -> impl IntoView {
 }
 
 #[component]
-fn FilterButton(
-    current: RwSignal<Option<String>>,
-    label: &'static str,
-    value: Option<&'static str>,
-) -> impl IntoView {
-    let v = value.map(|s| s.to_string());
-    let active = {
-        let v = v.clone();
-        Memo::new(move |_| current.get() == v)
-    };
+fn FilterButton(current: RwSignal<SwapFilter>, value: SwapFilter) -> impl IntoView {
+    // `value` is `Copy`, so the on:click closure can simply read it. Earlier
+    // versions cloned an `Option<String>` per click, which still worked but
+    // made the handler harder to reason about during hydration debugging.
     view! {
         <button
             class=move || {
-                if active.get() { "btn" } else { "btn btn-secondary" }
+                if current.get() == value { "btn" } else { "btn btn-secondary" }
             }
-            on:click=move |_| current.set(v.clone())
+            on:click=move |_| current.set(value)
         >
-            {label}
+            {value.label()}
         </button>
     }
 }
 
 #[component]
-fn SwapsTable(rows: Vec<SwapRow>, total: i64) -> impl IntoView {
+fn SwapsTable(rows: Vec<SwapRow>, total: i64, filter: SwapFilter) -> impl IntoView {
+    let shown = rows.len();
+    // Sanity-check label: when a filter is active, show "N filtered" so the
+    // operator can see that the filter actually narrowed the result. The
+    // server's `total` is computed against the *same* predicate as the rows,
+    // so `total == shown` whenever the result set fits in one page (which it
+    // always does now that the server returns every match).
+    let summary = match filter {
+        SwapFilter::All => format!("{total} total"),
+        other => format!("{total} {} (of all swaps)", other.label()),
+    };
+    let row_count_hint = if (shown as i64) < total {
+        Some(format!(" — showing {shown}"))
+    } else {
+        None
+    };
     view! {
         <div class="tile overflow-x-auto">
             <table class="w-full text-sm">
@@ -87,7 +137,9 @@ fn SwapsTable(rows: Vec<SwapRow>, total: i64) -> impl IntoView {
                     {rows.into_iter().map(|r| view! { <SwapRowView r=r/> }).collect_view()}
                 </tbody>
             </table>
-            <div class="mt-3 text-xs text-slate-500">{format!("{} total", total)}</div>
+            <div class="mt-3 text-xs text-slate-500">
+                {summary}{row_count_hint}
+            </div>
         </div>
     }
 }
