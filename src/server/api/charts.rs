@@ -124,12 +124,18 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .filter(|r| !r.3.is_zero() && !r.4.is_zero() && !r.5.is_zero())
         .collect();
 
-    type CapitalRow = (DateTime<Utc>, String, Option<Decimal>);
+    // Pull asset + amount so we can fill in missing usd_value_at_event from
+    // the nearest snapshot price. Without this, NULL-USD capital events
+    // silently contribute zero to cum_capital and the trade-PnL residual
+    // absorbs the missing capital — wrongly inflating "trades captured".
+    type CapitalRow = (DateTime<Utc>, String, String, Decimal, Option<Decimal>);
     let cap_events: Vec<CapitalRow> = capital_events::table
         .filter(capital_events::occurred_at.ge(since))
         .select((
             capital_events::occurred_at,
             capital_events::direction,
+            capital_events::asset,
+            capital_events::amount_atomic,
             capital_events::usd_value_at_event,
         ))
         .order(capital_events::occurred_at.asc())
@@ -142,6 +148,9 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
 
     let mut actual = Vec::with_capacity(snapshots.len());
     let mut baseline = Vec::with_capacity(snapshots.len());
+    let mut market_cum = Vec::with_capacity(snapshots.len());
+    let mut trade_cum = Vec::with_capacity(snapshots.len());
+    let mut capital_cum = Vec::with_capacity(snapshots.len());
 
     if snapshots.is_empty() {
         return Ok(AttributionDto {
@@ -154,7 +163,57 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
             capital_flow_usd: "0".into(),
             period: period.to_string(),
             sample_count: 0,
+            market_cum,
+            trade_cum,
+            capital_cum,
+            capital_events_missing_usd: 0,
+            capital_events_total: cap_events.len() as i32,
         });
+    }
+
+    // Estimate USD value for capital events that have NULL `usd_value_at_event`
+    // by linear-search for the nearest snapshot in time and pricing the amount
+    // at that snapshot's btc_usd/xmr_usd. USD-denominated capital events are
+    // already in USD so they don't need estimation.
+    let nearest_snapshot_idx = |t: &DateTime<Utc>| -> usize {
+        let mut best = (0usize, i64::MAX);
+        for (i, s) in snapshots.iter().enumerate() {
+            let d = (s.0 - *t).num_seconds().abs();
+            if d < best.1 {
+                best = (i, d);
+            }
+        }
+        best.0
+    };
+    let mut missing_usd_count = 0i32;
+    let cap_events_resolved: Vec<(DateTime<Utc>, String, Decimal)> = cap_events
+        .iter()
+        .map(|(t, dir, asset, amount_atomic, usd_opt)| {
+            let usd = if let Some(v) = usd_opt {
+                *v
+            } else {
+                missing_usd_count += 1;
+                let snap = &snapshots[nearest_snapshot_idx(t)];
+                match asset.as_str() {
+                    "BTC" => (*amount_atomic / sats_per_btc) * snap.3,
+                    "XMR" => (*amount_atomic / pico_per_xmr) * snap.4,
+                    // USD asset: amount_atomic is the USD value itself (the
+                    // capital.rs add() codepath only handles BTC/XMR today, but
+                    // the schema allows USD; treat the atomic field as USD).
+                    "USD" => *amount_atomic,
+                    _ => zero,
+                }
+            };
+            (*t, dir.clone(), usd)
+        })
+        .collect();
+    if missing_usd_count > 0 {
+        tracing::warn!(
+            period = period,
+            missing = missing_usd_count,
+            total = cap_events.len(),
+            "attribution: estimated USD value for {missing_usd_count} capital_events with NULL usd_value_at_event using nearest snapshot price",
+        );
     }
 
     let start_value = snapshots[0].5;
@@ -162,13 +221,26 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
     let mut cum_capital = zero;
 
     // First point: start of period — by definition no PnL has accumulated yet.
+    let t0 = snapshots[0].0;
     actual.push(ChartPoint {
-        t: snapshots[0].0,
+        t: t0,
         v: start_value.to_string(),
     });
     baseline.push(ChartPoint {
-        t: snapshots[0].0,
+        t: t0,
         v: start_value.to_string(),
+    });
+    market_cum.push(ChartPoint {
+        t: t0,
+        v: "0".into(),
+    });
+    trade_cum.push(ChartPoint {
+        t: t0,
+        v: "0".into(),
+    });
+    capital_cum.push(ChartPoint {
+        t: t0,
+        v: "0".into(),
     });
 
     for i in 1..snapshots.len() {
@@ -180,15 +252,15 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         cum_market += market_step;
 
         // Sum capital events strictly between prev.0 and cur.0.
-        let cap_step: Decimal = cap_events
+        let cap_step: Decimal = cap_events_resolved
             .iter()
             .filter(|(t, _, _)| *t > prev.0 && *t <= cur.0)
-            .map(|(_, dir, usd)| {
-                let v = usd.unwrap_or(zero);
-                if dir == "deposit" { v } else { -v }
-            })
+            .map(|(_, dir, usd)| if dir == "deposit" { *usd } else { -*usd })
             .sum();
         cum_capital += cap_step;
+
+        // Trade-PnL as a running residual: end_so_far - start - cum_market - cum_capital
+        let cur_trade_pnl = cur.5 - start_value - cum_market - cum_capital;
 
         actual.push(ChartPoint {
             t: cur.0,
@@ -198,10 +270,38 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
             t: cur.0,
             v: (start_value + cum_market + cum_capital).to_string(),
         });
+        market_cum.push(ChartPoint {
+            t: cur.0,
+            v: cum_market.to_string(),
+        });
+        trade_cum.push(ChartPoint {
+            t: cur.0,
+            v: cur_trade_pnl.to_string(),
+        });
+        capital_cum.push(ChartPoint {
+            t: cur.0,
+            v: cum_capital.to_string(),
+        });
     }
 
     let end_value = snapshots.last().map(|s| s.5).unwrap_or(zero);
     let trade_pnl = end_value - start_value - cum_market - cum_capital;
+
+    // Diagnostic log — helps explain unexpected "trade PnL" numbers when they
+    // arise. Includes the identity check.
+    tracing::debug!(
+        period = period,
+        snapshots = snapshots.len(),
+        cap_events = cap_events.len(),
+        missing_usd = missing_usd_count,
+        start_value = %start_value,
+        end_value = %end_value,
+        cum_market = %cum_market,
+        cum_capital = %cum_capital,
+        trade_pnl = %trade_pnl,
+        identity_check = %(end_value - start_value - cum_market - cum_capital - trade_pnl),
+        "attribution computed",
+    );
 
     Ok(AttributionDto {
         actual,
@@ -213,6 +313,11 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         capital_flow_usd: cum_capital.to_string(),
         period: period.to_string(),
         sample_count: snapshots.len() as i32,
+        market_cum,
+        trade_cum,
+        capital_cum,
+        capital_events_missing_usd: missing_usd_count,
+        capital_events_total: cap_events.len() as i32,
     })
 }
 

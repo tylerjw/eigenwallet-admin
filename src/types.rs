@@ -165,6 +165,27 @@ pub struct AttributionDto {
     pub capital_flow_usd: String,
     pub period: String,
     pub sample_count: i32,
+    /// Cumulative market P&L at each sample timestamp (aligned to `actual`).
+    /// Lets the client display "market P&L through hovered point" without
+    /// recomputing on every mouse move. Empty if attribution wasn't computed.
+    #[serde(default)]
+    pub market_cum: Vec<ChartPoint>,
+    /// Cumulative trade P&L at each sample timestamp (residual after market
+    /// and capital are removed).
+    #[serde(default)]
+    pub trade_cum: Vec<ChartPoint>,
+    /// Cumulative capital flow at each sample timestamp.
+    #[serde(default)]
+    pub capital_cum: Vec<ChartPoint>,
+    /// Count of `capital_events` rows in the window that had a NULL
+    /// `usd_value_at_event`. The server estimates these from the nearest
+    /// snapshot price, but exposes the count so the UI can warn about
+    /// reduced confidence in the trade-PnL number.
+    #[serde(default)]
+    pub capital_events_missing_usd: i32,
+    /// Total count of `capital_events` rows in the window.
+    #[serde(default)]
+    pub capital_events_total: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

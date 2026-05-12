@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use leptos::prelude::*;
 
 use crate::components::chart::InteractiveLineChart;
@@ -89,28 +91,32 @@ pub fn ChartsPage() -> impl IntoView {
     }
 }
 
+/// Period button row. Explicit buttons (no `iter().map().collect_view()`) so
+/// hydration reliably attaches the `on:click` handlers. The previous
+/// iterator-based form rendered fine but didn't always rewire its events
+/// post-hydration, so the chart appeared frozen on the initial 7d window.
 #[component]
 fn PeriodPicker(period: RwSignal<String>) -> impl IntoView {
-    let opts = ["24h", "7d", "30d", "90d", "all"];
     view! {
         <div class="flex gap-1">
-            {opts.iter().map(|o| {
-                let o = o.to_string();
-                let active = {
-                    let o = o.clone();
-                    Memo::new(move |_| period.get() == o)
-                };
-                let click_v = o.clone();
-                view! {
-                    <button
-                        class=move || if active.get() { "btn" } else { "btn btn-secondary" }
-                        on:click=move |_| period.set(click_v.clone())
-                    >
-                        {o.clone()}
-                    </button>
-                }
-            }).collect_view()}
+            <PeriodButton period=period value="24h"/>
+            <PeriodButton period=period value="7d"/>
+            <PeriodButton period=period value="30d"/>
+            <PeriodButton period=period value="90d"/>
+            <PeriodButton period=period value="all"/>
         </div>
+    }
+}
+
+#[component]
+fn PeriodButton(period: RwSignal<String>, value: &'static str) -> impl IntoView {
+    view! {
+        <button
+            class=move || if period.get() == value { "btn" } else { "btn btn-secondary" }
+            on:click=move |_| period.set(value.to_string())
+        >
+            {value}
+        </button>
     }
 }
 
@@ -154,35 +160,279 @@ fn AttributionView(a: AttributionDto) -> impl IntoView {
         }
         .into_any();
     }
-    let svg = two_line_svg(&a.actual, &a.no_trade_baseline, 800, 200);
-    let start = fmt_usd(&a.start_value_usd);
-    let end = fmt_usd(&a.end_value_usd);
-    let market = fmt_usd_signed(&a.market_pnl_usd);
-    let trade = fmt_usd_signed(&a.trade_pnl_usd);
-    let capital = fmt_usd_signed(&a.capital_flow_usd);
-    let total = signed_diff(&a.end_value_usd, &a.start_value_usd);
+
+    // Hovered sample index drives the StatCard values. None = period totals.
+    let hovered: RwSignal<Option<usize>> = RwSignal::new(None);
+
+    // Period totals as fallback when not hovering.
+    let total_market = a.market_pnl_usd.clone();
+    let total_trade = a.trade_pnl_usd.clone();
+    let total_capital = a.capital_flow_usd.clone();
+    let start_str = fmt_usd(&a.start_value_usd);
+    let total_str = signed_diff(&a.end_value_usd, &a.start_value_usd);
+    let total_str_static = total_str.clone();
+
+    let actual = Arc::new(a.actual.clone());
+    let baseline = Arc::new(a.no_trade_baseline.clone());
+    let market_cum = Arc::new(a.market_cum.clone());
+    let trade_cum = Arc::new(a.trade_cum.clone());
+    let capital_cum = Arc::new(a.capital_cum.clone());
+
+    let period_label = a.period.clone();
+    let sample_count = a.sample_count;
+    let missing_usd = a.capital_events_missing_usd;
+    let total_events = a.capital_events_total;
+
+    // "End" / "Now" follows the hovered sample's actual value; falls back to
+    // the period end. Same for market / trade / capital StatCards.
+    let end_label = {
+        let actual = actual.clone();
+        Memo::new(move |_| {
+            let idx = hovered
+                .get()
+                .unwrap_or_else(|| actual.len().saturating_sub(1));
+            actual
+                .get(idx)
+                .map(|p| fmt_usd(&p.v))
+                .unwrap_or_else(|| "—".into())
+        })
+    };
+    let market_label = {
+        let series = market_cum.clone();
+        let fallback = total_market.clone();
+        Memo::new(move |_| match hovered.get() {
+            Some(idx) => series
+                .get(idx)
+                .map(|p| fmt_usd_signed(&p.v))
+                .unwrap_or_else(|| fmt_usd_signed(&fallback)),
+            None => fmt_usd_signed(&fallback),
+        })
+    };
+    let trade_label = {
+        let series = trade_cum.clone();
+        let fallback = total_trade.clone();
+        Memo::new(move |_| match hovered.get() {
+            Some(idx) => series
+                .get(idx)
+                .map(|p| fmt_usd_signed(&p.v))
+                .unwrap_or_else(|| fmt_usd_signed(&fallback)),
+            None => fmt_usd_signed(&fallback),
+        })
+    };
+    let capital_label = {
+        let series = capital_cum.clone();
+        let fallback = total_capital.clone();
+        Memo::new(move |_| match hovered.get() {
+            Some(idx) => series
+                .get(idx)
+                .map(|p| fmt_usd_signed(&p.v))
+                .unwrap_or_else(|| fmt_usd_signed(&fallback)),
+            None => fmt_usd_signed(&fallback),
+        })
+    };
+    let total_label = {
+        let actual = actual.clone();
+        let start_val: f64 = a.start_value_usd.parse().unwrap_or(0.0);
+        let fallback = total_str.clone();
+        Memo::new(move |_| match hovered.get() {
+            Some(idx) => actual
+                .get(idx)
+                .map(|p| {
+                    let v: f64 = p.v.parse().unwrap_or(0.0);
+                    fmt_usd_signed(&(v - start_val).to_string())
+                })
+                .unwrap_or_else(|| fallback.clone()),
+            None => fallback.clone(),
+        })
+    };
 
     view! {
         <div class="mt-2 space-y-3">
-            <div inner_html=svg></div>
+            <AttributionSvg
+                actual=actual.clone()
+                baseline=baseline.clone()
+                hovered=hovered
+            />
             <div class="flex flex-wrap gap-2 text-xs">
                 <Legend color="#818cf8" label="actual portfolio value"/>
                 <Legend color="#94a3b8" label="if no swaps had happened (price + capital flow only)"/>
             </div>
             <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
-                <StatCard label="Start" value=start/>
-                <StatCard label="Now" value=end/>
-                <StatCard label="Δ market" value=market hint="price moves on holdings"/>
-                <StatCard label="Δ trades" value=trade hint="swap spread captured"/>
-                <StatCard label="Δ capital" value=capital hint="deposits − withdrawals"/>
+                <StatCard label="Start" value=Signal::derive(move || start_str.clone())/>
+                <StatCard label="Now" value=Signal::derive(move || end_label.get())/>
+                <StatCard label="Δ market" value=Signal::derive(move || market_label.get()) hint="price moves on holdings"/>
+                <StatCard label="Δ trades" value=Signal::derive(move || trade_label.get()) hint="swap spread captured"/>
+                <StatCard label="Δ capital" value=Signal::derive(move || capital_label.get()) hint="deposits − withdrawals"/>
             </div>
             <div class="text-xs text-slate-500">
-                {format!(
+                {move || format!(
                     "Total change over {}: {}  ({} samples, sample every ~5 min)",
-                    a.period, total, a.sample_count
+                    period_label.clone(), total_label.get(), sample_count
                 )}
+                <span class="ml-2 text-slate-600">
+                    {format!("[period total: {total_str_static}]")}
+                </span>
+                {if missing_usd > 0 {
+                    Some(view! {
+                        <div class="mt-1 text-amber-400">
+                            {format!(
+                                "Note: {missing_usd} of {total_events} capital_events in this window had a NULL usd_value_at_event; \
+                                 the server estimated USD from the nearest snapshot price. Trade-P&L confidence is reduced; \
+                                 backfill historical USD prices on those rows for an exact number.",
+                            )}
+                        </div>
+                    })
+                } else { None }}
             </div>
         </div>
+    }
+    .into_any()
+}
+
+/// Two-line attribution SVG with reactive hover. Mirrors the readout/crosshair
+/// pattern from `InteractiveLineChart` but renders two paths (actual + dashed
+/// no-trade baseline). On hover, writes the nearest-x sample index into
+/// `hovered`, which the parent's StatCards key off.
+#[component]
+fn AttributionSvg(
+    actual: Arc<Vec<ChartPoint>>,
+    baseline: Arc<Vec<ChartPoint>>,
+    hovered: RwSignal<Option<usize>>,
+) -> impl IntoView {
+    let w: i32 = 800;
+    let h: i32 = 200;
+    let pad_l = 56.0f64;
+    let pad_r = 10.0f64;
+    let pad_t = 10.0f64;
+    let pad_b = 10.0f64;
+    let wf = w as f64;
+    let hf = h as f64;
+
+    if actual.is_empty() {
+        return view! {
+            <svg viewBox=format!("0 0 {w} {h}") class="w-full">
+                <text x="10" y="20" fill="#64748b">"no data"</text>
+            </svg>
+        }
+        .into_any();
+    }
+
+    let xy = |p: &ChartPoint| (p.t.timestamp() as f64, p.v.parse::<f64>().unwrap_or(0.0));
+    let all_xy: Vec<(f64, f64)> = actual.iter().chain(baseline.iter()).map(xy).collect();
+    let xmin = all_xy.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+    let xmax = all_xy
+        .iter()
+        .map(|(x, _)| *x)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let ymin = all_xy.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
+    let ymax = all_xy
+        .iter()
+        .map(|(_, y)| *y)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let xspan = (xmax - xmin).max(1.0);
+    let yspan = (ymax - ymin).max(1e-9);
+    let to_x = move |v: f64| pad_l + (v - xmin) / xspan * (wf - pad_l - pad_r);
+    let to_y = move |v: f64| (hf - pad_b) - (v - ymin) / yspan * (hf - pad_t - pad_b);
+
+    let xs_px: Vec<f64> = actual.iter().map(|p| to_x(xy(p).0)).collect();
+    let xs_px = Arc::new(xs_px);
+
+    let path_of = |pts: &[ChartPoint]| -> String {
+        let mut d = String::new();
+        for (i, p) in pts.iter().enumerate() {
+            let (x, y) = xy(p);
+            d.push_str(if i == 0 { "M " } else { " L " });
+            d.push_str(&format!("{:.2} {:.2}", to_x(x), to_y(y)));
+        }
+        d
+    };
+    let actual_d = path_of(&actual);
+    let baseline_d = path_of(&baseline);
+
+    // Y axis labels: min, mid, max
+    let labels = [
+        (ymax, to_y(ymax)),
+        ((ymin + ymax) / 2.0, to_y((ymin + ymax) / 2.0)),
+        (ymin, to_y(ymin)),
+    ];
+
+    let xs_for_handler = xs_px.clone();
+    let on_move = move |ev: leptos::ev::MouseEvent| {
+        use wasm_bindgen::JsCast;
+        let Some(target) = ev.current_target() else {
+            return;
+        };
+        let Ok(elem) = target.dyn_into::<leptos::web_sys::Element>() else {
+            return;
+        };
+        let rect = elem.get_bounding_client_rect();
+        let mx = ev.client_x() as f64 - rect.x();
+        let mx_vb = (mx / rect.width()) * wf;
+        let mut best = (0usize, f64::INFINITY);
+        for (i, px) in xs_for_handler.iter().enumerate() {
+            let d = (*px - mx_vb).abs();
+            if d < best.1 {
+                best = (i, d);
+            }
+        }
+        hovered.set(Some(best.0));
+    };
+    let on_leave = move |_| hovered.set(None);
+
+    let xs_for_cursor = xs_px.clone();
+    let actual_for_cursor = actual.clone();
+    let cursor_xy = Memo::new(move |_| {
+        let idx = hovered.get()?;
+        let x = xs_for_cursor.get(idx).copied()?;
+        let y = actual_for_cursor.get(idx).map(|p| to_y(xy(p).1))?;
+        Some((x, y))
+    });
+
+    view! {
+        <svg
+            viewBox=format!("0 0 {w} {h}")
+            preserveAspectRatio="none"
+            class="w-full select-none touch-none"
+            style=format!("height: {h}px;")
+            on:mousemove=on_move
+            on:mouseleave=on_leave
+        >
+            {labels.iter().map(|(val, yp)| {
+                let val = *val;
+                let yp = *yp;
+                let label = fmt_thousands(val);
+                let label_int = label.split_once('.').map(|(a, _)| a.to_string()).unwrap_or(label);
+                view! {
+                    <line
+                        x1=pad_l y1=yp
+                        x2=wf - pad_r y2=yp
+                        stroke="#1e293b" stroke-width="0.5"
+                    />
+                    <text
+                        x=pad_l - 4.0 y=yp + 3.0
+                        fill="#64748b" font-size="10"
+                        text-anchor="end"
+                    >
+                        {format!("${label_int}")}
+                    </text>
+                }
+            }).collect_view()}
+            <path d=baseline_d fill="none" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="4 3"/>
+            <path d=actual_d fill="none" stroke="#818cf8" stroke-width="1.6"/>
+
+            {move || cursor_xy.get().map(|(x, _y)| view! {
+                <line
+                    x1=x y1=pad_t
+                    x2=x y2=hf - pad_b
+                    stroke="#475569"
+                    stroke-width="1"
+                    stroke-dasharray="2 3"
+                />
+            })}
+            {move || cursor_xy.get().map(|(x, y)| view! {
+                <circle cx=x cy=y r="3.5" fill="#a5b4fc" stroke="#818cf8" stroke-width="2"/>
+            })}
+        </svg>
     }
     .into_any()
 }
@@ -200,13 +450,13 @@ fn Legend(color: &'static str, label: &'static str) -> impl IntoView {
 #[component]
 fn StatCard(
     label: &'static str,
-    value: String,
+    #[prop(into)] value: Signal<String>,
     #[prop(optional, into)] hint: Option<&'static str>,
 ) -> impl IntoView {
     view! {
         <div class="rounded-md border border-slate-800 bg-slate-900/40 px-2 py-1.5">
             <div class="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
-            <div class="font-mono">{value}</div>
+            <div class="font-mono">{move || value.get()}</div>
             {hint.map(|h| view! { <div class="text-[10px] text-slate-500 mt-0.5">{h}</div> })}
         </div>
     }
@@ -216,15 +466,21 @@ fn StatCard(
 fn fmt_thousands(v: f64) -> String {
     let s = format!("{:.2}", v);
     let (int_part, dec) = s.split_once('.').unwrap_or((&s, "00"));
+    let neg = int_part.starts_with('-');
+    let digits = int_part.trim_start_matches('-');
     let mut grouped = String::new();
-    for (i, ch) in int_part.chars().rev().enumerate() {
+    for (i, ch) in digits.chars().rev().enumerate() {
         if i > 0 && i % 3 == 0 {
             grouped.push(',');
         }
         grouped.push(ch);
     }
     let int_part: String = grouped.chars().rev().collect();
-    format!("{int_part}.{dec}")
+    if neg {
+        format!("-{int_part}.{dec}")
+    } else {
+        format!("{int_part}.{dec}")
+    }
 }
 
 fn fmt_usd(s: &str) -> String {
@@ -245,107 +501,4 @@ fn signed_diff(end: &str, start: &str) -> String {
     let e = end.parse::<f64>().unwrap_or(0.0);
     let s = start.parse::<f64>().unwrap_or(0.0);
     fmt_usd_signed(&(e - s).to_string())
-}
-
-/// Format an axis value compactly. Uses thousand separators; if the absolute
-/// value is large, drops the decimal portion. Used for tooltips and axis labels.
-fn format_axis_value(v: f64) -> String {
-    if v.abs() >= 1000.0 {
-        let s = fmt_thousands(v);
-        s.split_once('.').map(|(a, _)| a.to_string()).unwrap_or(s)
-    } else {
-        fmt_thousands(v)
-    }
-}
-
-/// Two-line plot: actual (solid indigo) over no-trade-baseline (dashed slate).
-/// Both series share the same time axis but each is scaled to the joint y-range.
-fn two_line_svg(a: &[ChartPoint], b: &[ChartPoint], w: i32, h: i32) -> String {
-    if a.is_empty() {
-        return format!(
-            "<svg viewBox='0 0 {w} {h}' class='w-full'><text x='10' y='20' fill='#64748b'>no data</text></svg>"
-        );
-    }
-    let xy = |p: &ChartPoint| (p.t.timestamp() as f64, p.v.parse::<f64>().unwrap_or(0.0));
-    let all_xy: Vec<(f64, f64)> = a.iter().chain(b.iter()).map(xy).collect();
-    let xmin = all_xy.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
-    let xmax = all_xy
-        .iter()
-        .map(|(x, _)| *x)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let ymin = all_xy.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
-    let ymax = all_xy
-        .iter()
-        .map(|(_, y)| *y)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let xspan = (xmax - xmin).max(1.0);
-    let yspan = (ymax - ymin).max(1e-9);
-    let pad_l = 56.0;
-    let pad = 10.0;
-    let to_x = |v: f64| pad_l + (v - xmin) / xspan * (w as f64 - pad_l - pad);
-    let to_y = |v: f64| (h as f64 - pad) - (v - ymin) / yspan * (h as f64 - 2.0 * pad);
-    let path = |pts: &[ChartPoint]| -> String {
-        let mut d = String::new();
-        for (i, p) in pts.iter().enumerate() {
-            let (x, y) = xy(p);
-            d.push_str(if i == 0 { "M " } else { " L " });
-            d.push_str(&format!("{:.2} {:.2}", to_x(x), to_y(y)));
-        }
-        d
-    };
-    let actual_d = path(a);
-    let baseline_d = path(b);
-
-    // Hover hits: one circle per actual point with both lines' values in the
-    // tooltip. (We pair by index; both series share the snapshot timestamps.)
-    let mut hits = String::new();
-    for (i, p) in a.iter().enumerate() {
-        let (x, y) = xy(p);
-        let baseline_v = b.get(i).map(|q| xy(q).1).unwrap_or(0.0);
-        let when = p.t.format("%Y-%m-%d %H:%M UTC");
-        let actual_s = format!("${}", format_axis_value(y));
-        let baseline_s = format!("${}", format_axis_value(baseline_v));
-        let trade_diff = y - baseline_v;
-        let sign = if trade_diff >= 0.0 { "+" } else { "-" };
-        let trade_s = format!("{sign}${}", format_axis_value(trade_diff.abs()));
-        hits.push_str(&format!(
-            "<circle cx='{cx:.2}' cy='{cy:.2}' r='8' fill='transparent' \
-              stroke='transparent' style='cursor:crosshair' \
-              onmouseover=\"this.setAttribute('fill','#818cf8')\" \
-              onmouseout=\"this.setAttribute('fill','transparent')\">\
-              <title>{when}\nactual: {actual_s}\nno-trade: {baseline_s}\ntrade Δ: {trade_s}</title>\
-             </circle>",
-            cx = to_x(x),
-            cy = to_y(y),
-        ));
-    }
-
-    // Y axis labels: min, mid, max
-    let labels = [
-        (ymax, to_y(ymax)),
-        ((ymin + ymax) / 2.0, to_y((ymin + ymax) / 2.0)),
-        (ymin, to_y(ymin)),
-    ];
-    let mut axis = String::new();
-    for (val, yp) in &labels {
-        let label = fmt_thousands(*val);
-        // Truncate decimals from "12,345.67" -> "12,345" for compactness.
-        let label_int = label.split_once('.').map(|(a, _)| a).unwrap_or(&label);
-        axis.push_str(&format!(
-            "<line x1='{pad_l}' y1='{yp:.1}' x2='{xmax_p}' y2='{yp:.1}' stroke='#1e293b' stroke-width='0.5'/>\
-             <text x='{tx:.1}' y='{ty:.1}' fill='#64748b' font-size='10' text-anchor='end'>${label_int}</text>",
-            xmax_p = w as f64 - pad,
-            tx = pad_l - 4.0,
-            ty = yp + 3.0,
-        ));
-    }
-
-    format!(
-        "<svg viewBox='0 0 {w} {h}' class='w-full'>\
-           {axis}\
-           <path d='{baseline_d}' fill='none' stroke='#94a3b8' stroke-width='1.3' stroke-dasharray='4 3'/>\
-           <path d='{actual_d}' fill='none' stroke='#818cf8' stroke-width='1.6'/>\
-           {hits}\
-         </svg>"
-    )
 }
