@@ -1,23 +1,7 @@
 use leptos::prelude::*;
 
-use crate::types::{CapitalEventDto, CapitalEventInput, RoiDto};
-
-#[server(name = GetRoi, prefix = "/api", endpoint = "roi")]
-pub async fn get_roi(
-    since: Option<String>,
-    method: Option<String>,
-    denom: Option<String>,
-) -> Result<RoiDto, ServerFnError> {
-    let state = crate::server::ssr_state()?;
-    crate::server::api::roi::compute(
-        &state,
-        since.as_deref(),
-        method.as_deref().unwrap_or("mtm"),
-        denom.as_deref().unwrap_or("usd"),
-    )
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))
-}
+use crate::pages::overview::get_lifetime_roi;
+use crate::types::{CapitalEventDto, CapitalEventInput, LifetimeRoiDto};
 
 #[server(name = ListCapitalEvents, prefix = "/api", endpoint = "capital-events/list")]
 pub async fn list_capital_events() -> Result<Vec<CapitalEventDto>, ServerFnError> {
@@ -37,7 +21,7 @@ pub async fn add_capital_event(input: CapitalEventInput) -> Result<CapitalEventD
 
 #[component]
 pub fn RoiPage() -> impl IntoView {
-    let roi = Resource::new(|| (), |_| async move { get_roi(None, None, None).await });
+    let roi = Resource::new(|| (), |_| async move { get_lifetime_roi().await });
     let events = Resource::new(|| (), |_| async move { list_capital_events().await });
 
     view! {
@@ -61,21 +45,66 @@ pub fn RoiPage() -> impl IntoView {
 }
 
 #[component]
-fn RoiTile(r: RoiDto) -> impl IntoView {
+fn RoiTile(r: LifetimeRoiDto) -> impl IntoView {
+    let pnl_neg = r.pnl_usd.trim_start().starts_with('-');
+    let pnl_zero = r.pnl_usd == "0" || r.pnl_usd == "0.00";
+    let big_class = if pnl_zero {
+        "tile-value text-slate-200"
+    } else if pnl_neg {
+        "tile-value text-rose-300"
+    } else {
+        "tile-value text-emerald-300"
+    };
+    let headline = match &r.roi_pct {
+        Some(p) if !pnl_neg && !pnl_zero => format!("+{p}%"),
+        Some(p) => format!("{p}%"),
+        None => "—".into(),
+    };
+    let since_str = r
+        .since
+        .map(|t| t.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "—".into());
+    let pnl_label = if pnl_neg {
+        format!("−${}", r.pnl_usd.trim_start_matches('-'))
+    } else {
+        format!("+${}", r.pnl_usd)
+    };
+    let primary = format!(
+        "${} deployed · ${} current · P&L {} · since {} ({} event{})",
+        r.capital_deployed_usd,
+        r.current_value_usd,
+        pnl_label,
+        since_str,
+        r.event_count,
+        if r.event_count == 1 { "" } else { "s" },
+    );
+    let breakdown = match (&r.market_pnl_usd, &r.trade_pnl_usd) {
+        (Some(m), Some(t)) => Some(format!(
+            "of which {} from holding (price moves) and {} from swaps",
+            format_signed_usd(m),
+            format_signed_usd(t),
+        )),
+        _ => None,
+    };
+
     view! {
         <div class="tile">
-            <div class="tile-title">"Return (" {r.method.clone()} ", " {r.denomination.clone()} ")"</div>
-            <div class="tile-value">{format!("{}%", r.pct_change)}</div>
-            <div class="text-xs text-slate-500 mt-1">
-                {format!(
-                    "from {} ({} days): {} → {}",
-                    r.since.format("%Y-%m-%d"),
-                    r.days_elapsed,
-                    r.start_value,
-                    r.current_value
-                )}
-            </div>
+            <div class="tile-title">"Lifetime ROI"</div>
+            <div class=big_class>{headline}</div>
+            <div class="text-xs text-slate-400 mt-1">{primary}</div>
+            {breakdown.map(|b| view! { <div class="text-xs text-slate-500 mt-0.5">{b}</div> })}
         </div>
+    }
+}
+
+fn format_signed_usd(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix('-') {
+        format!("−${rest}")
+    } else if trimmed == "0" || trimmed == "0.00" || trimmed.is_empty() {
+        format!("${trimmed}")
+    } else {
+        format!("+${trimmed}")
     }
 }
 
@@ -220,23 +249,28 @@ fn EventsTable(rows: Vec<CapitalEventDto>) -> impl IntoView {
             <table class="w-full text-sm">
                 <thead>
                     <tr class="text-left text-xs uppercase text-slate-500">
-                        <th class="py-2 pr-4">"When"</th>
+                        <th class="py-2 pr-4 whitespace-nowrap">"When"</th>
                         <th class="py-2 pr-4">"Direction"</th>
                         <th class="py-2 pr-4">"Asset"</th>
-                        <th class="py-2 pr-4">"Amount"</th>
-                        <th class="py-2 pr-4">"USD at event"</th>
+                        <th class="py-2 pr-4 text-right">"Amount"</th>
+                        <th class="py-2 pr-4 text-right">"USD at event"</th>
                         <th class="py-2 pr-4">"Notes"</th>
                     </tr>
                 </thead>
                 <tbody>
                     {rows.into_iter().map(|e| {
+                        let amount_fmt = format_event_amount(&e.asset, &e.amount_atomic);
+                        let usd_fmt = e.usd_value_at_event
+                            .as_deref()
+                            .map(format_usd_decimal)
+                            .unwrap_or_else(|| "—".into());
                         view! {
                             <tr class="border-t border-slate-800">
-                                <td class="py-2 pr-4">{e.occurred_at.format("%Y-%m-%d").to_string()}</td>
+                                <td class="py-2 pr-4 whitespace-nowrap">{e.occurred_at.format("%Y-%m-%d").to_string()}</td>
                                 <td class="py-2 pr-4">{e.direction}</td>
                                 <td class="py-2 pr-4">{e.asset}</td>
-                                <td class="py-2 pr-4">{e.amount_atomic}</td>
-                                <td class="py-2 pr-4">{e.usd_value_at_event.unwrap_or_else(|| "—".into())}</td>
+                                <td class="py-2 pr-4 text-right font-mono tabular-nums">{amount_fmt}</td>
+                                <td class="py-2 pr-4 text-right font-mono tabular-nums">{usd_fmt}</td>
                                 <td class="py-2 pr-4 text-slate-400">{e.notes.unwrap_or_default()}</td>
                             </tr>
                         }
@@ -245,4 +279,23 @@ fn EventsTable(rows: Vec<CapitalEventDto>) -> impl IntoView {
             </table>
         </div>
     }
+}
+
+/// Convert an atomic-units amount to a human-friendly string given the
+/// asset. BTC stored in sats (1e8); XMR stored in piconero (1e12); USD
+/// stored in cents (1e2) for direct fiat-deposit rows.
+fn format_event_amount(asset: &str, amount_atomic: &str) -> String {
+    let raw: f64 = amount_atomic.parse().unwrap_or(0.0);
+    match asset {
+        "BTC" => format!("{:.8} BTC", raw / 1e8),
+        "XMR" => format!("{:.6} XMR", raw / 1e12),
+        "USD" => format!("${:.2}", raw / 100.0),
+        _ => amount_atomic.to_string(),
+    }
+}
+
+/// Drop trailing zeros after the decimal so $4570.00000000 reads $4570.00.
+fn format_usd_decimal(raw: &str) -> String {
+    let v: f64 = raw.parse().unwrap_or(0.0);
+    format!("${:.2}", v)
 }
