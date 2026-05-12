@@ -97,6 +97,35 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    spread_optimizer_config (id) {
+        id -> Int4,
+        gamma -> Numeric,
+        min_spread -> Numeric,
+        max_spread -> Numeric,
+        target_swap_profit_usd -> Numeric,
+        amortized_recycle_cost_usd -> Numeric,
+        chain_fees_per_swap_usd -> Numeric,
+        step_size_max -> Numeric,
+        cooldown_seconds -> Int4,
+        auto_apply -> Bool,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    spread_recommendations (id) {
+        id -> Int8,
+        recommended_at -> Timestamptz,
+        current_spread -> Numeric,
+        recommended_spread -> Numeric,
+        components -> Jsonb,
+        rationale -> Text,
+        applied -> Bool,
+        applied_at -> Nullable<Timestamptz>,
+    }
+}
+
 diesel::joinable!(competitor_quotes -> competitor_scans (scan_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
@@ -108,4 +137,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     competitor_scans,
     competitor_quotes,
     maker_config_history,
+    spread_optimizer_config,
+    spread_recommendations,
 );

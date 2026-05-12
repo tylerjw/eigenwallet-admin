@@ -11,6 +11,7 @@ pub mod market;
 pub mod overview;
 pub mod roi;
 pub mod spread;
+pub mod spread_optimizer;
 pub mod swaps;
 pub mod version;
 pub mod wallet_rules;

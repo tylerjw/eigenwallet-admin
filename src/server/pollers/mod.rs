@@ -7,6 +7,7 @@ mod competitor_scan;
 mod kraken_backfill;
 mod log_tail;
 mod snapshot_backfill;
+mod spread_optimizer;
 mod swap_sync;
 
 use crate::server::state::AppState;
@@ -29,5 +30,6 @@ pub fn spawn_all(state: AppState) {
             tracing::warn!(error = %e, "balance snapshot backfill failed");
         }
     });
+    tokio::spawn(spread_optimizer::run(state.clone()));
     tokio::spawn(competitor_scan::run(state));
 }

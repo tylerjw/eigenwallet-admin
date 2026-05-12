@@ -264,6 +264,53 @@ pub struct MarketPositionDto {
     pub trend_30m: Vec<ChartPoint>,
 }
 
+/// Operator-tunable parameters for the auto-spread optimizer. Persisted as
+/// a single-row table in admin DB; mirrored into this DTO for the UI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpreadOptimizerConfigDto {
+    /// Avellaneda-Stoikov risk aversion. Higher → wider spreads.
+    pub gamma: String,
+    pub min_spread: String,
+    pub max_spread: String,
+    /// Target USD profit per swap; drives the margin_term in the formula.
+    pub target_swap_profit_usd: String,
+    /// Estimated round-trip rebalance cost per swap, USD.
+    pub amortized_recycle_cost_usd: String,
+    /// Estimated BTC + XMR on-chain fees per swap, USD.
+    pub chain_fees_per_swap_usd: String,
+    /// Hard cap on per-cycle spread change.
+    pub step_size_max: String,
+    pub cooldown_seconds: i32,
+    /// When true, the poller pushes recommendations directly to asb's
+    /// ConfigMap. Default false; operator opts in.
+    pub auto_apply: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpreadOptimizerComponentsDto {
+    pub floor: String,
+    pub vol_term: String,
+    pub inventory_term: String,
+    pub competitor_term: String,
+    pub margin_term: String,
+    pub raw_vol_30min: String,
+    pub inventory_skew: String,
+    pub tier1_cutoff_pct: Option<String>,
+    pub avg_swap_usd: String,
+    pub clamped_to_bounds: bool,
+    pub step_capped: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpreadOptimizerRecommendationDto {
+    pub recommended_at: DateTime<Utc>,
+    pub current_spread: String,
+    pub recommended_spread: String,
+    pub components: SpreadOptimizerComponentsDto,
+    pub rationale: String,
+    pub auto_apply: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SpreadRecommendationDto {
     pub current_spread_pct: Option<String>,
