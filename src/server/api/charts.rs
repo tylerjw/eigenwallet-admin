@@ -102,7 +102,7 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
     let mut conn = db::checkout(&state.pool).await?;
 
     type SnapshotRow = (DateTime<Utc>, i64, Decimal, Decimal, Decimal, Decimal);
-    let mut snapshots: Vec<SnapshotRow> = balance_snapshots::table
+    let snapshots_raw: Vec<SnapshotRow> = balance_snapshots::table
         .filter(balance_snapshots::taken_at.ge(since))
         .select((
             balance_snapshots::taken_at,
@@ -115,17 +115,14 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .order(balance_snapshots::taken_at.asc())
         .load(&mut *conn)
         .await?;
-    // Drop leading rows where the CEX cache hadn't populated yet (btc_usd or
-    // xmr_usd == 0). Without this, the first interval's market-PnL gets
-    // (real_price − 0) × holdings, which inflates the chart by the entire
-    // portfolio value and isn't real P&L.
-    let drop = snapshots
-        .iter()
-        .take_while(|r| r.3.is_zero() || r.4.is_zero())
-        .count();
-    if drop > 0 {
-        snapshots.drain(..drop);
-    }
+    // Drop ANY snapshot with zero prices (CEX cache miss). These produce
+    // garbage attribution: a row with btc_usd=0 next to one with btc_usd=80k
+    // generates a market-PnL step of `holdings × 80k`, which dwarfs the real
+    // signal. Leading and mid-series zero rows alike must be filtered.
+    let snapshots: Vec<SnapshotRow> = snapshots_raw
+        .into_iter()
+        .filter(|r| !r.3.is_zero() && !r.4.is_zero() && !r.5.is_zero())
+        .collect();
 
     type CapitalRow = (DateTime<Utc>, String, Option<Decimal>);
     let cap_events: Vec<CapitalRow> = capital_events::table

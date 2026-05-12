@@ -69,16 +69,33 @@ fn OverviewBody(data: OverviewDto) -> impl IntoView {
         .as_ref()
         .map(|r| format!("{}/{}", r.registered, r.total))
         .unwrap_or_else(|| "—".into());
+    let reg_subtitle = data
+        .registration
+        .as_ref()
+        .map(|r| {
+            format!(
+                "registered at {} of {} configured rendezvous nodes — peers discover us via these",
+                r.registered, r.total
+            )
+        })
+        .unwrap_or_else(|| "rendezvous nodes peers use to discover us".into());
+    let onion_subtitle = if data.onion_addresses.is_empty() {
+        "no hidden-service address yet — Tor still bootstrapping".to_string()
+    } else {
+        "Tor hidden-service is published — peers can reach us via .onion".to_string()
+    };
 
     view! {
         <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-            <Tile title="BTC balance">{btc}</Tile>
-            <Tile title="XMR balance">{xmr}</Tile>
-            <Tile title="Total (USD)">{total_usd}</Tile>
-            <Tile title="Active swaps">{data.active_swaps.to_string()}</Tile>
-            <Tile title="Peers">{peer_count}</Tile>
-            <Tile title="Rendezvous">{reg_text}</Tile>
-            <Tile title="Spread">
+            <Tile title="BTC balance" subtitle="spendable BTC in the maker wallet">{btc}</Tile>
+            <Tile title="XMR balance" subtitle="spendable XMR in the maker wallet">{xmr}</Tile>
+            <Tile title="Total (USD)" subtitle="BTC + XMR valued at the latest CEX mid">{total_usd}</Tile>
+            <Tile title="Active swaps" subtitle="swaps still in progress (not yet redeemed/refunded)">
+                {data.active_swaps.to_string()}
+            </Tile>
+            <Tile title="Peers" subtitle="active libp2p connections">{peer_count}</Tile>
+            <Tile title="Rendezvous" subtitle=reg_subtitle>{reg_text}</Tile>
+            <Tile title="Spread" subtitle="our quoted price vs. CEX mid (positive = we charge a premium for XMR)">
                 {data
                     .current_quote
                     .as_ref()
@@ -86,7 +103,7 @@ fn OverviewBody(data: OverviewDto) -> impl IntoView {
                     .map(|s| format!("+{}%", trim_decimal(&s, 2)))
                     .unwrap_or_else(|| "—".into())}
             </Tile>
-            <Tile title="Onion">
+            <Tile title="Onion" subtitle=onion_subtitle>
                 {if data.onion_addresses.is_empty() {
                     "—".to_string()
                 } else {

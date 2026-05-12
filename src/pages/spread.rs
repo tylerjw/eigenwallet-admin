@@ -4,7 +4,7 @@ use crate::types::{
     MakerConfigDto, MakerConfigUpdate, MakerConfigUpdateResult, SpreadRecommendationDto,
 };
 
-#[server(name = GetMakerConfig, prefix = "/api", endpoint = "maker/config")]
+#[server(name = GetMakerConfig, prefix = "/api", endpoint = "maker/config/get")]
 pub async fn get_maker_config() -> Result<MakerConfigDto, ServerFnError> {
     let state = crate::server::ssr_state()?;
     crate::server::api::maker::read_config(&state)
@@ -12,7 +12,7 @@ pub async fn get_maker_config() -> Result<MakerConfigDto, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-#[server(name = UpdateMakerConfig, prefix = "/api", endpoint = "maker/config")]
+#[server(name = UpdateMakerConfig, prefix = "/api", endpoint = "maker/config/save")]
 pub async fn update_maker_config(
     update: MakerConfigUpdate,
 ) -> Result<MakerConfigUpdateResult, ServerFnError> {

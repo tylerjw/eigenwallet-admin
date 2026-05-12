@@ -123,9 +123,24 @@ fn ScanTable(scan: CompetitorScanDto) -> impl IntoView {
                         } else {
                             q.reason_if_unreachable.clone().unwrap_or_else(|| "—".into())
                         };
+                        let row_class = if q.is_us {
+                            "border-t border-indigo-500/40 bg-indigo-500/10 is-us"
+                        } else {
+                            "border-t border-slate-800"
+                        };
+                        let label = if q.is_us {
+                            view! {
+                                <span class="ml-2 inline-flex items-center rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">"you"</span>
+                            }.into_any()
+                        } else {
+                            ().into_any()
+                        };
+                        let is_us_attr = if q.is_us { "true" } else { "false" };
                         view! {
-                            <tr class="border-t border-slate-800">
-                                <td class="py-2 pr-4 font-mono text-xs">{peer_short}</td>
+                            <tr class=row_class attr:data-is-us=is_us_attr>
+                                <td class="py-2 pr-4 font-mono text-xs">
+                                    {peer_short} {label}
+                                </td>
                                 <td class="py-2 pr-4">{q.price_btc_per_xmr.unwrap_or_else(|| "—".into())}</td>
                                 <td class="py-2 pr-4">{q.min_btc.unwrap_or_else(|| "—".into())}</td>
                                 <td class="py-2 pr-4">{q.max_btc.unwrap_or_else(|| "—".into())}</td>

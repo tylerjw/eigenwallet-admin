@@ -180,6 +180,12 @@ pub struct CompetitorQuoteDto {
     pub reachable: bool,
     pub reason_if_unreachable: Option<String>,
     pub spread_vs_cex_pct: Option<String>,
+    /// True for the row representing us in the rendered list.
+    #[serde(default)]
+    pub is_us: bool,
+    /// asb / swap-cli version the competitor is running, e.g. "4.5.0".
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

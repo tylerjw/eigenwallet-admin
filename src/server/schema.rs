@@ -82,6 +82,7 @@ diesel::table! {
         max_btc -> Nullable<Numeric>,
         reachable -> Bool,
         reason_if_unreachable -> Nullable<Text>,
+        version -> Nullable<Text>,
     }
 }
 

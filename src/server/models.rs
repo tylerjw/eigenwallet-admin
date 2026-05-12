@@ -110,6 +110,7 @@ pub struct CompetitorQuote {
     pub max_btc: Option<Decimal>,
     pub reachable: bool,
     pub reason_if_unreachable: Option<String>,
+    pub version: Option<String>,
 }
 
 #[derive(Insertable, Debug, Clone)]
@@ -123,6 +124,7 @@ pub struct NewCompetitorQuote {
     pub max_btc: Option<Decimal>,
     pub reachable: bool,
     pub reason_if_unreachable: Option<String>,
+    pub version: Option<String>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
