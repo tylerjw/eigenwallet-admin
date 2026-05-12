@@ -3,7 +3,9 @@ use leptos::prelude::*;
 use crate::components::chart::InteractiveLineChart;
 use crate::components::tile::Tile;
 use crate::pages::charts::get_account_value;
-use crate::types::{ChartSeries, OverviewDto, VersionInfoDto};
+use crate::types::{
+    ChartSeries, MakerConfigUpdateResult, OverviewDto, PauseStateDto, VersionInfoDto,
+};
 
 #[server(name = GetOverview, prefix = "/api", endpoint = "overview")]
 pub async fn get_overview() -> Result<OverviewDto, ServerFnError> {
@@ -21,6 +23,30 @@ pub async fn get_version_info() -> Result<VersionInfoDto, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+#[server(name = GetPauseState, prefix = "/api", endpoint = "maker/pause/get")]
+pub async fn get_pause_state() -> Result<PauseStateDto, ServerFnError> {
+    let state = crate::server::ssr_state()?;
+    crate::server::api::maker::get_pause_state(&state)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[server(name = PauseMaker, prefix = "/api", endpoint = "maker/pause")]
+pub async fn pause_maker() -> Result<MakerConfigUpdateResult, ServerFnError> {
+    let state = crate::server::ssr_state()?;
+    crate::server::api::maker::pause(&state)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[server(name = ResumeMaker, prefix = "/api", endpoint = "maker/resume")]
+pub async fn resume_maker() -> Result<MakerConfigUpdateResult, ServerFnError> {
+    let state = crate::server::ssr_state()?;
+    crate::server::api::maker::resume(&state)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 #[component]
 pub fn OverviewPage() -> impl IntoView {
     let data = Resource::new(|| (), |_| async move { get_overview().await });
@@ -28,6 +54,11 @@ pub fn OverviewPage() -> impl IntoView {
     let value = Resource::new(
         || (),
         |_| async move { get_account_value(Some("7d".into()), Some("usd".into())).await },
+    );
+    let pause_reload = RwSignal::new(0i32);
+    let pause = Resource::new(
+        move || pause_reload.get(),
+        |_| async move { get_pause_state().await },
     );
 
     view! {
@@ -37,6 +68,16 @@ pub fn OverviewPage() -> impl IntoView {
                 {move || version.get().map(|res| match res {
                     Ok(v) => view! { <VersionBanner info=v/> }.into_any(),
                     Err(e) => view! { <VersionBannerError msg=e.to_string()/> }.into_any(),
+                })}
+            </Suspense>
+            <Suspense fallback=move || view! { <div class="text-slate-500 text-sm">"Checking maker state…"</div> }>
+                {move || pause.get().map(|res| match res {
+                    Ok(s) => view! { <PauseBanner state=s reload=pause_reload/> }.into_any(),
+                    Err(e) => view! {
+                        <div class="tile border-amber-700 text-amber-300 text-sm">
+                            {format!("Pause state unavailable: {e}")}
+                        </div>
+                    }.into_any(),
                 })}
             </Suspense>
             <Suspense fallback=move || view! { <Loading/> }>
@@ -56,6 +97,109 @@ pub fn OverviewPage() -> impl IntoView {
                 </Suspense>
             </div>
         </div>
+    }
+}
+
+#[component]
+fn PauseBanner(state: PauseStateDto, reload: RwSignal<i32>) -> impl IntoView {
+    let busy = RwSignal::new(false);
+    let msg = RwSignal::new(Option::<String>::None);
+    let err = RwSignal::new(Option::<String>::None);
+
+    let on_pause = move |_| {
+        if !web_sys::window()
+            .and_then(|w| w.confirm_with_message(
+                "Pause the maker?\n\nasb will quote off-market and stop accepting new swaps in ~30-60 s. In-flight swaps continue to settle.",
+            ).ok())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        busy.set(true);
+        msg.set(None);
+        err.set(None);
+        leptos::task::spawn_local(async move {
+            match pause_maker().await {
+                Ok(r) => {
+                    msg.set(Some(r.message));
+                    reload.update(|n| *n += 1);
+                }
+                Err(e) => err.set(Some(e.to_string())),
+            }
+            busy.set(false);
+        });
+    };
+
+    let on_resume = move |_| {
+        busy.set(true);
+        msg.set(None);
+        err.set(None);
+        leptos::task::spawn_local(async move {
+            match resume_maker().await {
+                Ok(r) => {
+                    msg.set(Some(r.message));
+                    reload.update(|n| *n += 1);
+                }
+                Err(e) => err.set(Some(e.to_string())),
+            }
+            busy.set(false);
+        });
+    };
+
+    if state.is_paused {
+        let since = state
+            .since
+            .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_else(|| "unknown".into());
+        view! {
+            <div class="tile border-rose-700 bg-rose-950/40">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <div class="text-sm font-semibold text-rose-200">
+                            "Maker is paused"
+                        </div>
+                        <div class="text-xs text-rose-300/80">
+                            {format!("No new swaps will be accepted. Paused since {since}. In-flight swaps are unaffected.")}
+                        </div>
+                    </div>
+                    <button
+                        class="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm font-medium text-white"
+                        on:click=on_resume
+                        prop:disabled=move || busy.get()
+                    >
+                        {move || if busy.get() { "Resuming…" } else { "Resume maker" }}
+                    </button>
+                </div>
+                {move || msg.get().map(|m| view! { <div class="mt-2 text-xs text-emerald-300">{m}</div> })}
+                {move || err.get().map(|e| view! { <div class="mt-2 text-xs text-rose-300">{e}</div> })}
+            </div>
+        }
+        .into_any()
+    } else {
+        view! {
+            <div class="tile">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <div class="text-sm font-medium text-slate-200">
+                            "Maker is live — quoting and accepting swaps"
+                        </div>
+                        <div class="text-xs text-slate-400">
+                            "Pause to stop accepting new swaps (in-flight ones keep settling). Quotes go off-market until you resume."
+                        </div>
+                    </div>
+                    <button
+                        class="px-3 py-1.5 rounded bg-rose-700 hover:bg-rose-600 disabled:opacity-50 text-sm font-medium text-white"
+                        on:click=on_pause
+                        prop:disabled=move || busy.get()
+                    >
+                        {move || if busy.get() { "Pausing…" } else { "Pause maker" }}
+                    </button>
+                </div>
+                {move || msg.get().map(|m| view! { <div class="mt-2 text-xs text-emerald-300">{m}</div> })}
+                {move || err.get().map(|e| view! { <div class="mt-2 text-xs text-rose-300">{e}</div> })}
+            </div>
+        }
+        .into_any()
     }
 }
 
