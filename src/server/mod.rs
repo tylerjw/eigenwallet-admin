@@ -139,8 +139,22 @@ async fn auth_gate(
         return next.run(req).await;
     }
     if path.starts_with("/api/") {
-        // Server-function call: respond with 401 so the client can surface it.
-        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        // Server-function call: 401 with a body that server_fn can decode.
+        // Empty bodies blow up the client with the cryptic
+        // `Invalid format: missing delimiter in ""`. The fetch-wrapping
+        // script in `app::shell` separately catches any 401 from /api/ and
+        // navigates to /login, so the body here is just a humane fallback
+        // for anyone who sees it (curl, dev tools).
+        let body = "ServerError|UNAUTHORIZED — session expired, please log in again";
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
+            body,
+        )
+            .into_response();
     }
     Redirect::to("/login").into_response()
 }

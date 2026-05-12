@@ -23,6 +23,11 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <AutoReload options=options.clone() />
                 <HydrationScripts options/>
                 <MetaTags/>
+                // Reload to /login on any 401 from a server function so the
+                // user sees the login form instead of a parse-error tile.
+                // The auth_gate returns a clear body, but the cleanest UX is
+                // just to navigate to login when the session is gone.
+                <script>"(function(){var f=window.fetch;window.fetch=function(){var a=arguments;return f.apply(this,a).then(function(r){if(r.status===401){try{var u=(typeof a[0]==='string'?a[0]:a[0].url)||'';if(u.indexOf('/api/')!==-1&&location.pathname!=='/login'){location.assign('/login');}}catch(e){}}return r;};};})();"</script>
             </head>
             <body>
                 <App/>
