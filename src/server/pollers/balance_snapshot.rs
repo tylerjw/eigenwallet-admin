@@ -37,6 +37,14 @@ async fn snapshot_once(state: &AppState) -> anyhow::Result<()> {
         None => (Decimal::ZERO, Decimal::ZERO),
     };
 
+    // Skip rows we can't price. A snapshot with zero prices propagates as
+    // total_usd=0 and poisons lifetime-ROI / chart math downstream. The
+    // CEX poller will recover on its next tick.
+    if btc_usd.is_zero() || xmr_usd.is_zero() {
+        tracing::debug!("balance-snapshot: skipping row, CEX prices unavailable");
+        return Ok(());
+    }
+
     let btc_decimal = Decimal::from(btc.balance) / Decimal::from(100_000_000i64);
     let xmr_decimal = xmr_atomic / Decimal::from(1_000_000_000_000i64);
     let total_btc = btc_decimal

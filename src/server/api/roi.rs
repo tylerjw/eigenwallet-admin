@@ -121,7 +121,13 @@ pub async fn lifetime(state: &AppStateInner) -> Result<LifetimeRoiDto> {
     }
     let event_count = rows.len() as i32;
 
+    // Use the most recent snapshot whose value is non-zero. When the live
+    // 5-min poller fires during a CEX cache miss it writes a row with
+    // `total_usd = 0` (and zero per-asset prices). Reading the absolute
+    // latest row would then say the portfolio is worth $0 — which the UI
+    // would helpfully render as a –100% lifetime ROI.
     let current_usd: Decimal = balance_snapshots::table
+        .filter(balance_snapshots::total_usd.gt(Decimal::ZERO))
         .select(balance_snapshots::total_usd)
         .order(balance_snapshots::taken_at.desc())
         .first::<Decimal>(&mut *conn)
