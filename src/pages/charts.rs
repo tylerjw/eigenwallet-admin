@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 
+use crate::components::chart::InteractiveLineChart;
 use crate::types::{AttributionDto, ChartPoint, ChartSeries};
 
 #[server(name = GetAccountValue, prefix = "/api", endpoint = "charts/account-value")]
@@ -131,20 +132,12 @@ fn DenomPicker(denom: RwSignal<String>) -> impl IntoView {
 
 #[component]
 fn SeriesView(series: ChartSeries) -> impl IntoView {
-    let svg = sparkline_svg(&series.points, 800, 160);
-    let count = series.points.len();
-    let last = series
-        .points
-        .last()
-        .map(|p| p.v.clone())
-        .unwrap_or_else(|| "—".into());
+    let prefix: &'static str = match series.denomination.as_str() {
+        "usd" => "$",
+        _ => "",
+    };
     view! {
-        <div class="mt-2">
-            <div inner_html=svg></div>
-            <div class="mt-2 text-xs text-slate-500">
-                {count} " samples • latest " {last}
-            </div>
-        </div>
+        <InteractiveLineChart points=series.points height=200 value_prefix=prefix/>
     }
 }
 
@@ -252,56 +245,6 @@ fn signed_diff(end: &str, start: &str) -> String {
     let e = end.parse::<f64>().unwrap_or(0.0);
     let s = start.parse::<f64>().unwrap_or(0.0);
     fmt_usd_signed(&(e - s).to_string())
-}
-
-pub(crate) fn sparkline_svg(points: &[ChartPoint], w: i32, h: i32) -> String {
-    if points.is_empty() {
-        return format!(
-            "<svg viewBox='0 0 {w} {h}' class='w-full'><text x='10' y='20' fill='#64748b'>no data</text></svg>"
-        );
-    }
-    let xs: Vec<f64> = points.iter().map(|p| p.t.timestamp() as f64).collect();
-    let ys: Vec<f64> = points
-        .iter()
-        .map(|p| p.v.parse::<f64>().unwrap_or(0.0))
-        .collect();
-    let xmin = xs.iter().cloned().fold(f64::INFINITY, f64::min);
-    let xmax = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let ymin = ys.iter().cloned().fold(f64::INFINITY, f64::min);
-    let ymax = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let xspan = (xmax - xmin).max(1.0);
-    let yspan = (ymax - ymin).max(1e-9);
-    let pad = 8.0;
-    let to_x = |v: f64| pad + (v - xmin) / xspan * (w as f64 - 2.0 * pad);
-    let to_y = |v: f64| (h as f64 - pad) - (v - ymin) / yspan * (h as f64 - 2.0 * pad);
-    let mut d = String::new();
-    for (i, (x, y)) in xs.iter().zip(ys.iter()).enumerate() {
-        d.push_str(if i == 0 { "M " } else { " L " });
-        d.push_str(&format!("{:.2} {:.2}", to_x(*x), to_y(*y)));
-    }
-    // Hover targets: one invisible circle per point with a native <title>
-    // showing the UTC timestamp and the formatted value.
-    let mut hits = String::new();
-    for (i, p) in points.iter().enumerate() {
-        let x = to_x(xs[i]);
-        let y = to_y(ys[i]);
-        let when = p.t.format("%Y-%m-%d %H:%M UTC");
-        let v_display = format_axis_value(ys[i]);
-        hits.push_str(&format!(
-            "<circle cx='{x:.2}' cy='{y:.2}' r='6' fill='transparent' \
-              stroke='transparent' style='cursor:crosshair' \
-              onmouseover=\"this.setAttribute('fill','#818cf8')\" \
-              onmouseout=\"this.setAttribute('fill','transparent')\">\
-              <title>{when} • {v_display}</title>\
-             </circle>",
-        ));
-    }
-    format!(
-        "<svg viewBox='0 0 {w} {h}' class='w-full'>\
-           <path d='{d}' fill='none' stroke='#818cf8' stroke-width='1.5'/>\
-           {hits}\
-         </svg>"
-    )
 }
 
 /// Format an axis value compactly. Uses thousand separators; if the absolute

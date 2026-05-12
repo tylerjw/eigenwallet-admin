@@ -1174,6 +1174,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

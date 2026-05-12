@@ -1,7 +1,8 @@
 use leptos::prelude::*;
 
+use crate::components::chart::InteractiveLineChart;
 use crate::components::tile::Tile;
-use crate::pages::charts::{get_account_value, sparkline_svg};
+use crate::pages::charts::get_account_value;
 use crate::types::{ChartSeries, OverviewDto};
 
 #[server(name = GetOverview, prefix = "/api", endpoint = "overview")]
@@ -45,31 +46,9 @@ pub fn OverviewPage() -> impl IntoView {
 
 #[component]
 fn ValueSparkline(series: ChartSeries) -> impl IntoView {
-    let svg = sparkline_svg(&series.points, 800, 140);
-    let count = series.points.len();
-    if count < 2 {
-        return view! {
-            <div class="mt-2 text-sm text-slate-400">
-                "Need at least two snapshots — fills in every 5 min."
-            </div>
-        }
-        .into_any();
-    }
-    let last = series
-        .points
-        .last()
-        .and_then(|p| p.v.parse::<f64>().ok())
-        .map(|v| format!("${v:.2}"))
-        .unwrap_or_else(|| "—".into());
     view! {
-        <div class="mt-2">
-            <div inner_html=svg></div>
-            <div class="mt-2 text-xs text-slate-500">
-                {count} " samples • latest " {last} " • hover a point for the exact value"
-            </div>
-        </div>
+        <InteractiveLineChart points=series.points height=180 value_prefix="$"/>
     }
-    .into_any()
 }
 
 #[component]
