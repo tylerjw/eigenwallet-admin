@@ -1,7 +1,7 @@
-//! Typed wrapper over asb 4.5.0's JSON-RPC at port 9944.
+//! Typed wrapper over asb 4.6.1's JSON-RPC at port 9944.
 //!
-//! Method names and response schemas verified against the running asb-4.5.0
-//! in the homelab on 2026-05-10. Notable shapes:
+//! Method names and response schemas verified against the running asb-4.6.1
+//! in the homelab on 2026-05-17. Notable shapes:
 //!   - All amount fields (`balance`, `btc_amount`, `xmr_amount`, `price`,
 //!     `min_quantity`, `max_quantity`, `exchange_rate`, `btc_redeem_fee`) are
 //!     integers in the asset's atomic units (satoshi for BTC, piconero/atomic

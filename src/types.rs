@@ -248,7 +248,7 @@ pub struct CompetitorQuoteDto {
     /// True for the row representing us in the rendered list.
     #[serde(default)]
     pub is_us: bool,
-    /// asb / swap-cli version the competitor is running, e.g. "4.5.0".
+    /// asb / swap-cli version the competitor is running, e.g. "4.6.1".
     #[serde(default)]
     pub version: Option<String>,
 }

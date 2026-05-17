@@ -46,7 +46,7 @@ impl AppConfig {
             asb_configmap_name: env_or("ASB_CONFIGMAP_NAME", "asb-config"),
             swap_cli_image: env_or(
                 "SWAP_CLI_IMAGE",
-                "ghcr.io/tylerjw/eigenwallet-swap-cli:4.5.0",
+                "ghcr.io/tylerjw/eigenwallet-swap-cli:4.6.1",
             ),
             asb_log_dir: env_or("ASB_LOG_DIR", "/asb-data/logs"),
             our_peer_id: std::env::var("OUR_PEER_ID").ok(),
