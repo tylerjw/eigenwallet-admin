@@ -131,13 +131,6 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .order(balance_snapshots::taken_at.asc())
         .load(&mut *conn)
         .await?;
-    // Earliest snapshot in the window with Kraken-side balances tracked.
-    // Used below to decide whether a BTC/XMR capital_event should count as
-    // external capital flow (pre-tracking: yes; post-tracking: no).
-    let kraken_tracking_start: Option<DateTime<Utc>> = raw_rows
-        .iter()
-        .find(|r| r.6 > 0 || !r.7.is_zero())
-        .map(|r| r.0);
     let snapshots_raw: Vec<SnapshotRow> = raw_rows
         .into_iter()
         .map(|(t, btc, xmr, btc_usd, xmr_usd, total, k_btc, k_xmr)| {
@@ -157,30 +150,25 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .filter(|r| !r.3.is_zero() && !r.4.is_zero() && !r.5.is_zero())
         .collect();
 
-    // USD events ALWAYS count as external capital flow (fiat → exchange).
+    // Only USD-asset events count as external capital flow.
     //
-    // BTC/XMR events represent operator-internal transfers between an
-    // off-system account (e.g. Kraken) and the maker wallet. Whether they
-    // count as capital flow depends on whether the snapshotter was tracking
-    // both sides at the time:
+    // Counting BTC/XMR events naively double-counts: e.g. a $10k USD deposit
+    // at Kraken (logged as a USD event) becomes XMR via a Kraken trade and
+    // then arrives at the maker wallet as a BTC/XMR `capital_events` row.
+    // The dollars are the same dollars; logging both would inflate
+    // `cum_capital` and drag `trade_pnl` negative.
     //
-    //   - Pre-Kraken-tracking (historical): only the maker side was recorded
-    //     in `balance_snapshots`. When XMR arrived from Kraken, `total_usd`
-    //     jumped by the XMR value out of "nowhere" (the Kraken-side
-    //     decrement was invisible). The residual `trade_pnl` would
-    //     incorrectly absorb that jump unless we count it as capital flow.
-    //
-    //   - Post-Kraken-tracking: kraken_* columns capture the off-system
-    //     side, so the snapshot delta across the transfer is zero. Counting
-    //     it as capital flow here would *subtract* the value twice and
-    //     leak negative trade-PnL.
-    //
-    // The cutoff `kraken_tracking_start` was computed above from `raw_rows`.
-    // Events before it are historical and counted; events at-or-after are
-    // zero-net and skipped.
+    // A proper accounting requires Kraken-side balance history at every
+    // snapshot, which the `kraken_*` columns provide going forward. Until
+    // those columns are also populated for historical hours (Kraken
+    // Ledgers backfill — see eigenwallet-admin issue for `rebalance_events`
+    // page), historical periods will still show some leakage of intra-
+    // operator XMR transfers into `trade_pnl`. The Lifetime ROI / P&L cards
+    // use the same math and exhibit the same caveat.
     type CapitalRow = (DateTime<Utc>, String, String, Decimal, Option<Decimal>);
     let cap_events: Vec<CapitalRow> = capital_events::table
         .filter(capital_events::occurred_at.ge(since))
+        .filter(capital_events::asset.eq("USD"))
         .select((
             capital_events::occurred_at,
             capital_events::direction,
@@ -191,19 +179,6 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .order(capital_events::occurred_at.asc())
         .load(&mut *conn)
         .await?;
-    // Drop BTC/XMR events that occurred after Kraken tracking started —
-    // they're zero-net transfers fully reflected in total_usd already.
-    let cap_events: Vec<CapitalRow> = cap_events
-        .into_iter()
-        .filter(|(t, _, asset, _, _)| match asset.as_str() {
-            "USD" => true,
-            "BTC" | "XMR" => match kraken_tracking_start {
-                Some(start) => *t < start,
-                None => true,
-            },
-            _ => false,
-        })
-        .collect();
 
     let zero = Decimal::ZERO;
     let sats_per_btc = Decimal::from(100_000_000i64);
