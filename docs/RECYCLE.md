@@ -35,57 +35,135 @@ continue settling; new ones can't start. This protects you from a
 
 ## Step 2 — Withdraw BTC from maker wallet to Kraken
 
+Use the **controller**, not `asb` directly. Running `asb withdraw-btc`
+from inside the asb pod hangs on Bitcoin wallet lock contention with
+the live daemon, and it expects an interactive TTY for confirmation
+prompts that `kubectl exec` can't reliably provide. The controller
+goes through asb's JSON-RPC (port 9944) so no lock, no TTY, no prompts.
+
 ```sh
-kubectl exec -it -n eigenwallet deploy/asb -- swap-cli withdraw-btc \
-  --address <kraken_btc_deposit_address> \
-  --amount <sats>
+kubectl exec -n eigenwallet deploy/asb-controller -- \
+  asb-controller --url=http://asb:9944 withdraw-btc \
+  <kraken_btc_deposit_address> "0.05 BTC"
 ```
 
-For the first recycle, batch the entire accumulated BTC float **minus
-a reserve of ~0.005 BTC** so the pod has something to quote with when
-you resume. Don't drain to zero.
+Arguments are **positional** (address first, amount second). Amount
+accepts `"0.05 BTC"` or `"5000000 sat"`; omit to sweep the wallet.
 
-Wait for **3 confirmations** (~30 min). Kraken will credit the deposit.
+Batch the entire accumulated BTC float **minus a reserve of ~0.005 BTC**
+so the pod has something to quote with when you resume. Don't drain to
+zero.
+
+The controller prints `Withdrew X BTC in transaction <txid>` immediately.
+Save the txid — you'll log it later. Wait for **3 confirmations** (~30 min,
+faster at low mempool fees) before Kraken credits the deposit. asb's
+fee selection uses a 1-block confirmation target by default; at low
+mempool sat/vB you'll pay near the floor (~1.25 sat/vB on the 2026-05-17
+recycle; 80-input sweep, ~5,500 vB, ~$0.70 total fee).
 
 ## Step 3 — BTC → USDT
 
-Kraken Pro → **BTC/USDT** → Sell → **Limit, post-only**.
+Kraken Pro → **BTC/USDT** (Kraken's ticker `XBT/USDT` is an alias) →
+Sell → **Limit, post-only**.
 
-- Slice into 2–3 clips. For a $750–1500 batch, 2 clips is fine.
-- Place at the **current best bid** (touch). No undercutting, no widening.
+- Slice into 2–3 clips. For a $750–1500 batch, 2 clips is fine; for
+  $10k+ batches, 3 clips of roughly equal size keeps each well inside
+  BTC/USDT's deep book.
+- Place at the **current best ask** (your side of the touch, top of
+  the red ladder). Post-only on a sell would reject if placed at the
+  bid as a crossing order, so join the ask ladder instead. No
+  undercutting (don't go below the bid), no widening (don't price
+  further away than the inside ask).
 - If a clip doesn't fill in ~10 min, cancel and re-place at the new touch.
 - **Never go market. Never disable post-only.** The patience pays the
-  difference between maker (0.20%) and taker (0.35%) — 75 bps on a $5k
-  clip is real money.
+  difference between maker (0.20%) and taker (0.35%) — 15 bps on a
+  $5k clip is real money.
 - If the book moves persistently against you for >30 min, accept that
   today is a bad day. Pause and resume tomorrow.
 
 Expected: **0.20% maker fee** at the default volume tier, plus
-~0.02–0.05% slippage on a small clip in deep BTC/USDT.
+~0.02–0.05% slippage on a small clip in deep BTC/USDT. The BTC leg
+is reliably the cheap, fast half of the recycle.
 
 ## Step 4 — USDT → XMR
 
 Kraken Pro → **XMR/USDT** → Buy → **Limit, post-only**.
 
 - **Slice smaller** than the BTC leg. The XMR book thins above ~$2k.
-- For a $1k batch this is one clip; for $5k+ batches do 3–5 clips of
-  $1k each, spaced 5–10 min.
-- Place at the current best ask, post-only.
-- Re-peg every 5–10 min if unfilled.
+- For a $1k batch this is one clip; for $5–10k batches do 3–5 clips
+  of $1k each, spaced 5–10 min; for $15–25k batches, 6–8 clips of
+  $2.5–3.5k each balances depth-impact vs. operator time-cost (a
+  $20k batch in $1k clips spread across 5 min spacing is ~3 hours
+  of trading attention — too long).
+- Place at the **current best bid** (your side of the touch, top of
+  the green ladder). Post-only on a buy would reject if placed at the
+  ask as a crossing order, so join the bid ladder instead.
+- Re-peg every 5–10 min if unfilled, **but not every time a bot
+  jumps you by 1 tick** — see "Reading the book" below.
 - If the orderbook is empty above the touch and you're not filling,
   that's the book telling you XMR sellers want a premium today. Wait
   an hour or resume tomorrow.
 
 Expected: **0.20% maker fee** + **0.10–0.25% effective spread** at
-the XMR book depth.
+the XMR book depth. The XMR leg is structurally the expensive, slow
+half of the recycle.
+
+### Reading the book
+
+XMR/USDT spread is structurally ~10× wider than BTC/USDT (e.g. ~10 bps
+vs. ~1 bp), because Monero has lower exchange volume and several venues
+have delisted it (Binance, OKX), concentrating activity on fewer makers
+without the HFT competition that compresses BTC's spread to a fraction
+of a basis point. Two consequences:
+
+- **Wider spread = better outcome for you as the patient maker.** Each
+  fill of your bid is a counterparty paying the 10 bps spread to you
+  vs. crossing as a taker. Don't be tempted by tiny price improvements;
+  the structural spread is yours to capture.
+- **Inside touch is decorative.** You will see microscopic orders
+  (e.g. 0.01 XMR ≈ $4) sitting one tick inside your bid, and again
+  one tick inside the best ask. These are queue-jumper bots: they
+  buy first-in-line priority at trivial cost in order to (a) be the
+  tripwire that signals incoming aggressive flow, (b) capture both
+  sides of the spread by being inside on each side, and (c) paint
+  the book to look tighter than it really is. Real depth starts at
+  *your* level. **Don't chase them by re-pegging to outbid by 1 tick**
+  — they'll just re-jump for another cent, and you're moving the book
+  against yourself for free intel they take. Sit; their tiny size dies
+  first to real aggressive flow, and your size fills as the flow
+  keeps going.
 
 ## Step 5 — Withdraw XMR to maker wallet
 
-Funding → Withdraw → Monero → select whitelisted address → submit.
-2FA + email confirmation, then wait for **10 Monero confirmations**
-(~20 min).
+Funding → Withdraw → Monero → select whitelisted address → **Send Max**
+→ submit. 2FA + email confirmation.
+
+Kraken's email sequence on a withdrawal is 3 stages — useful to know
+which one you're looking at:
+
+1. **"You've initiated a withdrawal"** — Kraken received the request,
+   queued for ops review. No on-chain action yet.
+2. **"Funds being processed"** / **"Funds being sent"** — ops released,
+   broadcast imminent.
+3. **"Withdrawal sent"** — broadcast on-chain, includes the Monero txid.
+
+Wall-clock between #1 and #3 is typically 5–30 min for routine
+withdrawals; mid-sized batches ($10k+) sometimes stretch to 60 min if
+they get flagged for manual review. If you're past 90 min Pending with
+no movement, check Kraken's status page before opening a support ticket.
+
+After broadcast, **10 Monero confirmations** are needed (~20 min — 2-min
+block time). The asb monero wallet auto-syncs, so as soon as confs land,
+admin's `/overview` will reflect the new XMR balance.
 
 XMR withdrawal fee: flat ~0.0001 XMR, negligible (<$0.05).
+
+Programmatic status from your laptop (uses the read-only API key set up
+in `homelab/scripts/kraken-query.py`):
+
+```sh
+homelab/scripts/kraken-query.py WithdrawStatus '{"asset": "XMR"}'
+```
 
 ## Step 6 — Resume maker
 
@@ -95,15 +173,48 @@ spread (verbatim restore from `maker_config_history`).
 
 ## Step 7 — Record the event
 
-Write down (or update `/recycle` page when it lands):
+Until the `rebalance_events` table + `/recycle` page exist (see "Why
+we don't automate execution" below), recycles are logged as **two
+paired rows in `capital_events`** — one BTC `withdraw`, one XMR
+`deposit` — tied together via the notes field. This preserves the
+operator's true cost basis for ROI math and gives the optimizer
+historical recycle costs to learn from.
 
-- Started at / completed at (UTC)
-- BTC sent (sats)
-- USDT realized from the sell leg (before/after fees)
-- XMR received from the buy leg
-- Total Kraken fees from Trade History
-- Kraken BTC/USDT and XMR/USDT mids at start and end (for slippage math)
-- Effective end-to-end cost in USD and as a % of batch size
+Pattern (run on the admin Postgres):
+
+```sql
+INSERT INTO capital_events
+  (occurred_at, direction, asset, amount_atomic, usd_value_at_event, notes)
+VALUES
+  ('<broadcast-time-utc>', 'withdraw', 'BTC',
+   <sats>, <gross-usdt-from-btc-sells>,
+   'Recycle leg out: asb → Kraken via <btc-txid>. Got back <xmr> XMR ' ||
+   '($<gross-usdt-spent-on-xmr> at buy-leg prices). Round-trip cost ' ||
+   '$<total-fees> (<pct>%) in Kraken fees.'),
+  ('<xmr-land-time-utc>', 'deposit', 'XMR',
+   <piconero>, <gross-usdt-spent-on-xmr>,
+   'Recycle leg: asb sent <btc> BTC to Kraken at <broadcast-time>, ' ||
+   'got back <xmr> XMR. Paired with the BTC withdrawal. Kraken flat ' ||
+   'fee 0.0001 XMR. Monero txid <xmr-txid>.');
+```
+
+Atomic units: BTC × 1e8 (satoshi), XMR × 1e12 (piconero).
+
+Pulling the numbers programmatically:
+
+```sh
+# Trade fills + fees for the recycle window
+homelab/scripts/kraken-query.py TradesHistory '{"start": <epoch>}'
+
+# XMR withdrawal txid (after Kraken broadcasts)
+homelab/scripts/kraken-query.py WithdrawStatus '{"asset": "XMR"}'
+
+# Live balances on the maker
+kubectl exec -n eigenwallet deploy/asb-controller -- \
+  asb-controller --url=http://asb:9944 bitcoin-balance
+kubectl exec -n eigenwallet deploy/asb-controller -- \
+  asb-controller --url=http://asb:9944 monero-balance
+```
 
 Then on `/spread` → Optimizer settings, update
 `amortized_recycle_cost_usd` to match the actual realized per-swap
@@ -126,6 +237,18 @@ batched bi-weekly through the BTC → USDT → XMR path:
 The fixed BTC withdrawal fee (~$5–15) dominates at small batch sizes.
 Double the batch ≈ halve the percentage cost. Bi-weekly batches of
 < $1000 are not economically viable on Kraken.
+
+## Realized recycles
+
+| Date | Batch | BTC out | XMR in | Total fees | % of batch | Notes |
+|---|---|---|---|---|---|---|
+| 2026-04-15 | ~$2k | 0.0271 BTC | 5.7183 XMR | ~$58 slip+fees | ~2.9% | Small batch, fixed BTC withdraw fee dominates |
+| 2026-04-18 / 25 | ~$1.4k | 0.0180 BTC | 3.7569 XMR | — | — | Split-deposit (2.998 immediate + 0.7589 batched on 04-25) |
+| 2026-05-17 | $17.4k | 0.22255688 BTC | 44.2580 XMR | $75.24 | **0.43%** | Below runbook band; BTC sell 0.23% all-in, XMR buy 0.20% maker + ~0.18% effective spread. Mempool was at 1 sat/vB so on-chain fee was trivial |
+
+The 2026-05-17 batch confirms the bottom of the band is reachable at
+$15k+ batch sizes when both legs cooperate (deep BTC liquidity + calm
+XMR book).
 
 ## What to avoid
 
