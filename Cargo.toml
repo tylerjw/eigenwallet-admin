@@ -68,6 +68,10 @@ notify = { version = "8", optional = true }
 electrum-client = { version = "0.25", optional = true }
 dotenvy = { version = "0.15", optional = true }
 serde_yaml_ng = { version = "0.10", optional = true }
+# Kraken read-only API request signing (HMAC-SHA512 over base64-decoded secret).
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [features]
 default = ["ssr"]
@@ -109,6 +113,9 @@ ssr = [
   "dep:dotenvy",
   "dep:rustls",
   "dep:serde_yaml_ng",
+  "dep:hmac",
+  "dep:sha2",
+  "dep:base64",
 ]
 
 [profile.release]

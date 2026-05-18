@@ -19,6 +19,9 @@ diesel::table! {
         xmr_usd -> Numeric,
         total_usd -> Numeric,
         total_btc -> Numeric,
+        kraken_btc_sat -> Int8,
+        kraken_xmr_atomic -> Numeric,
+        kraken_usd -> Numeric,
     }
 }
 

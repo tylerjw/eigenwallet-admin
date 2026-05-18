@@ -28,6 +28,9 @@ pub struct BalanceSnapshot {
     pub xmr_usd: Decimal,
     pub total_usd: Decimal,
     pub total_btc: Decimal,
+    pub kraken_btc_sat: i64,
+    pub kraken_xmr_atomic: Decimal,
+    pub kraken_usd: Decimal,
 }
 
 #[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone)]

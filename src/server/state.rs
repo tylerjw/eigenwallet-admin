@@ -10,6 +10,7 @@ use crate::server::api::version::VersionInfoCache;
 use crate::server::clients::asb::AsbClient;
 use crate::server::clients::cex::CexCache;
 use crate::server::clients::electrs::ElectrsClient;
+use crate::server::clients::kraken_private::KrakenPrivateClient;
 use crate::server::clients::monerod::MonerodClient;
 use crate::server::kube_client::KubeClient;
 use crate::server::wallet_rules::{WalletRulesCache, WalletRulesHandle};
@@ -90,6 +91,11 @@ pub struct AppStateInner {
     pub version_info: RwLock<VersionInfoCache>,
     pub kube: Option<KubeClient>,
     pub wallet_rules: WalletRulesHandle,
+    /// Optional read-only Kraken API client. `None` when `KRAKEN_API_KEY` /
+    /// `KRAKEN_API_SECRET` env vars are absent or empty — the snapshotter
+    /// then records zero for the `kraken_*` columns and the chart degrades
+    /// gracefully to the asb-only total.
+    pub kraken: Option<KrakenPrivateClient>,
     pub leptos_options: LeptosOptions,
 }
 
@@ -108,6 +114,18 @@ impl AppState {
         let asb = AsbClient::new(&config.asb_rpc_url);
         let monerod = MonerodClient::new(&config.monerod_rpc_url);
         let electrs = ElectrsClient::new(&config.electrs_url);
+        let kraken = KrakenPrivateClient::new(
+            std::env::var("KRAKEN_API_KEY").unwrap_or_default(),
+            std::env::var("KRAKEN_API_SECRET").unwrap_or_default(),
+        );
+        if kraken.is_none() {
+            tracing::warn!(
+                "KRAKEN_API_KEY / KRAKEN_API_SECRET not set — \
+                 balance snapshots will record 0 for Kraken columns, \
+                 which means the chart will show in-recycle dips. \
+                 Set both env vars (read-only key) to enable."
+            );
+        }
         let kube = match KubeClient::try_in_cluster().await {
             Ok(k) => Some(k),
             Err(e) => {
@@ -132,6 +150,7 @@ impl AppState {
             version_info: RwLock::new(VersionInfoCache::default()),
             kube,
             wallet_rules: Arc::new(RwLock::new(WalletRulesCache::default())),
+            kraken,
             leptos_options,
         }))
     }

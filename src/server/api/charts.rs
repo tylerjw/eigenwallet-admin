@@ -101,8 +101,22 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
     let since = parse_period(period);
     let mut conn = db::checkout(&state.pool).await?;
 
+    // Tuple: (taken_at, btc_sat_total, xmr_atomic_total, btc_usd, xmr_usd, total_usd)
+    // where btc_sat_total/xmr_atomic_total fold asb + kraken holdings so
+    // market-PnL attribution treats inter-wallet transfers (recycles) as
+    // value-neutral.
     type SnapshotRow = (DateTime<Utc>, i64, Decimal, Decimal, Decimal, Decimal);
-    let snapshots_raw: Vec<SnapshotRow> = balance_snapshots::table
+    type RawRow = (
+        DateTime<Utc>,
+        i64,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        i64,
+        Decimal,
+    );
+    let raw_rows: Vec<RawRow> = balance_snapshots::table
         .filter(balance_snapshots::taken_at.ge(since))
         .select((
             balance_snapshots::taken_at,
@@ -111,10 +125,22 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
             balance_snapshots::btc_usd,
             balance_snapshots::xmr_usd,
             balance_snapshots::total_usd,
+            balance_snapshots::kraken_btc_sat,
+            balance_snapshots::kraken_xmr_atomic,
         ))
         .order(balance_snapshots::taken_at.asc())
         .load(&mut *conn)
         .await?;
+    let snapshots_raw: Vec<SnapshotRow> = raw_rows
+        .into_iter()
+        .map(|(t, btc, xmr, btc_usd, xmr_usd, total, k_btc, k_xmr)| {
+            // Saturating add — both values are non-negative; overflow would
+            // require an impossible Bitcoin float.
+            let btc_total = btc.saturating_add(k_btc);
+            let xmr_total = xmr + k_xmr;
+            (t, btc_total, xmr_total, btc_usd, xmr_usd, total)
+        })
+        .collect();
     // Drop ANY snapshot with zero prices (CEX cache miss). These produce
     // garbage attribution: a row with btc_usd=0 next to one with btc_usd=80k
     // generates a market-PnL step of `holdings × 80k`, which dwarfs the real

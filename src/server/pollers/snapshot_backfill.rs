@@ -199,6 +199,12 @@ pub async fn run_once(state: AppState) -> Result<()> {
             xmr_usd,
             total_usd,
             total_btc,
+            // No Kraken history backfill — we don't have historical Kraken
+            // balances correlated to past hours. Records 0 here is honest:
+            // the asb-only chart line for historical periods.
+            kraken_btc_sat: 0,
+            kraken_xmr_atomic: Decimal::ZERO,
+            kraken_usd: Decimal::ZERO,
         });
     }
 
