@@ -131,6 +131,13 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .order(balance_snapshots::taken_at.asc())
         .load(&mut *conn)
         .await?;
+    // Earliest snapshot in the window with Kraken-side balances tracked.
+    // Used below to decide whether a BTC/XMR capital_event should count as
+    // external capital flow (pre-tracking: yes; post-tracking: no).
+    let kraken_tracking_start: Option<DateTime<Utc>> = raw_rows
+        .iter()
+        .find(|r| r.6 > 0 || !r.7.is_zero())
+        .map(|r| r.0);
     let snapshots_raw: Vec<SnapshotRow> = raw_rows
         .into_iter()
         .map(|(t, btc, xmr, btc_usd, xmr_usd, total, k_btc, k_xmr)| {
@@ -150,19 +157,30 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .filter(|r| !r.3.is_zero() && !r.4.is_zero() && !r.5.is_zero())
         .collect();
 
-    // Only USD-asset events count as external capital flow. BTC/XMR rows
-    // represent transfers between an off-system account (e.g. Kraken) and
-    // the maker wallet — their value already moves through holdings × CEX
-    // price, so counting their USD valuation in `cum_capital` would
-    // double-count the same dollars and leak ~$capital_basis of negative
-    // trade-PnL into the residual.
+    // USD events ALWAYS count as external capital flow (fiat → exchange).
     //
-    // If you ever directly deposit BTC/XMR from outside Kraken, record it
-    // as a USD event with the dollar value at deposit time.
+    // BTC/XMR events represent operator-internal transfers between an
+    // off-system account (e.g. Kraken) and the maker wallet. Whether they
+    // count as capital flow depends on whether the snapshotter was tracking
+    // both sides at the time:
+    //
+    //   - Pre-Kraken-tracking (historical): only the maker side was recorded
+    //     in `balance_snapshots`. When XMR arrived from Kraken, `total_usd`
+    //     jumped by the XMR value out of "nowhere" (the Kraken-side
+    //     decrement was invisible). The residual `trade_pnl` would
+    //     incorrectly absorb that jump unless we count it as capital flow.
+    //
+    //   - Post-Kraken-tracking: kraken_* columns capture the off-system
+    //     side, so the snapshot delta across the transfer is zero. Counting
+    //     it as capital flow here would *subtract* the value twice and
+    //     leak negative trade-PnL.
+    //
+    // The cutoff `kraken_tracking_start` was computed above from `raw_rows`.
+    // Events before it are historical and counted; events at-or-after are
+    // zero-net and skipped.
     type CapitalRow = (DateTime<Utc>, String, String, Decimal, Option<Decimal>);
     let cap_events: Vec<CapitalRow> = capital_events::table
         .filter(capital_events::occurred_at.ge(since))
-        .filter(capital_events::asset.eq("USD"))
         .select((
             capital_events::occurred_at,
             capital_events::direction,
@@ -173,6 +191,19 @@ pub async fn attribution(state: &AppStateInner, period: &str) -> Result<Attribut
         .order(capital_events::occurred_at.asc())
         .load(&mut *conn)
         .await?;
+    // Drop BTC/XMR events that occurred after Kraken tracking started —
+    // they're zero-net transfers fully reflected in total_usd already.
+    let cap_events: Vec<CapitalRow> = cap_events
+        .into_iter()
+        .filter(|(t, _, asset, _, _)| match asset.as_str() {
+            "USD" => true,
+            "BTC" | "XMR" => match kraken_tracking_start {
+                Some(start) => *t < start,
+                None => true,
+            },
+            _ => false,
+        })
+        .collect();
 
     let zero = Decimal::ZERO;
     let sats_per_btc = Decimal::from(100_000_000i64);
