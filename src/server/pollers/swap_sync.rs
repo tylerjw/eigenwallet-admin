@@ -68,5 +68,36 @@ async fn upsert(state: &AppState, entries: Vec<SwapEntry>) -> anyhow::Result<()>
             .execute(&mut *conn)
             .await?;
     }
+    // Compute profit_usd for any newly-completed swaps. Looks up the nearest
+    // cex_prices sample to completed_at and applies the maker accounting:
+    //   - redeemed: maker received BTC, paid XMR → profit = btc·btc_usd − xmr·xmr_usd
+    //   - punished: maker kept BTC and own XMR  → profit = btc·btc_usd
+    //   - refunded / other: zero (no value exchanged)
+    // Idempotent: WHERE profit_usd IS NULL skips already-populated rows.
+    diesel::sql_query(
+        "UPDATE swaps s SET \
+           btc_usd_at_completion = (SELECT btc_usd FROM cex_prices \
+              WHERE btc_usd IS NOT NULL \
+              ORDER BY abs(EXTRACT(epoch FROM (sampled_at - s.completed_at))) ASC LIMIT 1), \
+           xmr_usd_at_completion = (SELECT xmr_usd FROM cex_prices \
+              WHERE xmr_usd IS NOT NULL \
+              ORDER BY abs(EXTRACT(epoch FROM (sampled_at - s.completed_at))) ASC LIMIT 1), \
+           profit_usd = CASE \
+             WHEN s.state ILIKE '%redeemed%' THEN \
+               s.btc_sat::numeric/1e8 * \
+                 (SELECT btc_usd FROM cex_prices WHERE btc_usd IS NOT NULL \
+                  ORDER BY abs(EXTRACT(epoch FROM (sampled_at - s.completed_at))) ASC LIMIT 1) \
+               - s.xmr_atomic::numeric/1e12 * \
+                 (SELECT xmr_usd FROM cex_prices WHERE xmr_usd IS NOT NULL \
+                  ORDER BY abs(EXTRACT(epoch FROM (sampled_at - s.completed_at))) ASC LIMIT 1) \
+             WHEN s.state ILIKE '%punished%' THEN \
+               s.btc_sat::numeric/1e8 * \
+                 (SELECT btc_usd FROM cex_prices WHERE btc_usd IS NOT NULL \
+                  ORDER BY abs(EXTRACT(epoch FROM (sampled_at - s.completed_at))) ASC LIMIT 1) \
+             ELSE 0 END \
+         WHERE s.completed_at IS NOT NULL AND s.profit_usd IS NULL",
+    )
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }

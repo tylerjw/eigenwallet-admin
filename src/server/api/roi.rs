@@ -5,7 +5,7 @@ use diesel_async::RunQueryDsl;
 use rust_decimal::Decimal;
 
 use crate::server::db;
-use crate::server::schema::{balance_snapshots, capital_events};
+use crate::server::schema::{balance_snapshots, capital_events, swaps};
 use crate::server::state::AppStateInner;
 use crate::types::{LifetimeRoiDto, RoiDto};
 
@@ -147,29 +147,41 @@ pub async fn lifetime(state: &AppStateInner) -> Result<LifetimeRoiDto> {
         None
     };
 
+    // Sum per-swap realized profit_usd directly from the `swaps` table. This
+    // is the authoritative source for "spread captured by swaps" — populated
+    // for every completed swap from the CEX mid prices at completion time.
+    // We previously derived this from the attribution residual
+    // (end - start - market - capital), but that math under-counts when the
+    // first balance snapshot post-dates earlier maker activity (the
+    // pre-tracking BTC accumulated through past swaps lands in start_value
+    // rather than in trade_pnl). Direct sum is correct in either world.
+    let trade_pnl_decimal: Decimal = swaps::table
+        .select(diesel::dsl::sql::<diesel::sql_types::Numeric>(
+            "COALESCE(SUM(profit_usd), 0)",
+        ))
+        .first(&mut *conn)
+        .await
+        .unwrap_or(Decimal::ZERO);
+    let trade_pnl_usd = Some(trade_pnl_decimal.round_dp(2).to_string());
+
     // Drop the connection before calling attribution — it checks out its own.
     drop(conn);
 
-    // Decompose pnl into market (HODL) vs trade (swap spread captured)
-    // by running the full-history attribution. The chart already implements
-    // exactly this decomposition between successive snapshots.
-    let (market_pnl_usd, trade_pnl_usd) =
-        match crate::server::api::charts::attribution(state, "all").await {
-            Ok(a) => (
-                a.market_pnl_usd
-                    .parse::<Decimal>()
-                    .ok()
-                    .map(|d| d.round_dp(2).to_string()),
-                a.trade_pnl_usd
-                    .parse::<Decimal>()
-                    .ok()
-                    .map(|d| d.round_dp(2).to_string()),
-            ),
-            Err(e) => {
-                tracing::warn!(error = %e, "lifetime ROI attribution unavailable");
-                (None, None)
-            }
-        };
+    // Market PnL ("price moves on held crypto") still comes from attribution,
+    // since it represents the BTC/XMR market exposure on holdings across the
+    // window — not something the swaps table tracks. The trade-PnL residual
+    // produced by attribution is discarded; we trust the swaps sum above.
+    let market_pnl_usd = match crate::server::api::charts::attribution(state, "all").await {
+        Ok(a) => a
+            .market_pnl_usd
+            .parse::<Decimal>()
+            .ok()
+            .map(|d| d.round_dp(2).to_string()),
+        Err(e) => {
+            tracing::warn!(error = %e, "lifetime ROI attribution unavailable");
+            None
+        }
+    };
 
     Ok(LifetimeRoiDto {
         capital_deployed_usd: deployed.round_dp(2).to_string(),
