@@ -1,7 +1,8 @@
-//! Typed wrapper over asb 4.6.1's JSON-RPC at port 9944.
+//! Typed wrapper over asb's JSON-RPC at port 9944.
 //!
-//! Method names and response schemas verified against the running asb-4.6.1
-//! in the homelab on 2026-05-17. Notable shapes:
+//! Method names and response schemas verified against asb-4.6.1 in the homelab
+//! on 2026-05-17. asb >= 4.9.0 additionally requires bearer-token auth on every
+//! request (see `AsbClient::new`). Notable shapes:
 //!   - All amount fields (`balance`, `btc_amount`, `xmr_amount`, `price`,
 //!     `min_quantity`, `max_quantity`, `exchange_rate`, `btc_redeem_fee`) are
 //!     integers in the asset's atomic units (satoshi for BTC, piconero/atomic
@@ -15,7 +16,7 @@
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, FixedOffset};
 use jsonrpsee::core::client::ClientT;
-use jsonrpsee::http_client::HttpClient;
+use jsonrpsee::http_client::{HeaderMap, HeaderValue, HttpClient};
 use jsonrpsee::rpc_params;
 use serde::{Deserialize, Serialize};
 
@@ -33,10 +34,32 @@ impl std::fmt::Debug for AsbClient {
 
 impl AsbClient {
     pub fn new(url: &str) -> Self {
-        let inner = HttpClient::builder()
-            .request_timeout(std::time::Duration::from_secs(15))
-            .build(url)
-            .expect("build asb http client");
+        let mut builder =
+            HttpClient::builder().request_timeout(std::time::Duration::from_secs(15));
+
+        // asb >= 4.9.0 requires JSON-RPC auth: the password is sent as
+        // `Authorization: Bearer <password>` on every request and verified
+        // against the asb's `--rpc-auth-file`. Read it from ASB_RPC_PASSWORD
+        // (mirror of the homelab `asb-rpc-auth` Secret). Left unset, no header
+        // is sent — fine against a pre-4.9.0 asb, but a 4.9.0+ asb will 401.
+        match std::env::var("ASB_RPC_PASSWORD") {
+            Ok(password) if !password.is_empty() => {
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    "authorization",
+                    HeaderValue::from_str(&format!("Bearer {password}"))
+                        .expect("ASB_RPC_PASSWORD is not a valid HTTP header value"),
+                );
+                builder = builder.set_headers(headers);
+            }
+            _ => {
+                tracing::warn!(
+                    "ASB_RPC_PASSWORD not set — asb >= 4.9.0 will reject every RPC call with 401"
+                );
+            }
+        }
+
+        let inner = builder.build(url).expect("build asb http client");
         Self {
             inner,
             url: url.to_string(),
