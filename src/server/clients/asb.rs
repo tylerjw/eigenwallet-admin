@@ -34,8 +34,7 @@ impl std::fmt::Debug for AsbClient {
 
 impl AsbClient {
     pub fn new(url: &str) -> Self {
-        let mut builder =
-            HttpClient::builder().request_timeout(std::time::Duration::from_secs(15));
+        let mut builder = HttpClient::builder().request_timeout(std::time::Duration::from_secs(15));
 
         // asb >= 4.9.0 requires JSON-RPC auth: the password is sent as
         // `Authorization: Bearer <password>` on every request and verified
